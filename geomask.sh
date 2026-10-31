@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.20.3"
+GM_VERSION="1.20.4"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.20.3"
+BACKEND_VERSION="1.20.4"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.20.3';
+var PANEL_VERSION = '1.20.4';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -20610,6 +20610,8 @@ def _zapret_sync():
     tunnel |= {d for d in (bare(p) for p in ytvpn_payload) if d}
     tunnel = tunnel - pinned_direct
     tunnel = {d for d in tunnel if re.fullmatch(r'[a-z0-9.\-\u0080-\uffff]+', d)}
+    global TUNNEL_SET
+    TUNNEL_SET = set(tunnel)          # direction B below works on exactly this set
     if not tunnel:
         print('zapret: nothing to exclude - skip'); return False
     try:
@@ -20640,12 +20642,68 @@ def _zapret_sync():
     except Exception as e:
         print('zapret exclude: write failed (%s)' % e); return False
 
+# ---------------------------------------------------------------------------
+# v1.20.4: zapret direction B - a domain that leaves through the tunnel must NOT stay in
+# zapret's FORCE list. Forcing DPI on it is pointless (the WAN only sees the encrypted hop to
+# the proxy) and harmful: the fake packets land on the proxy connection, not on the site.
+#
+# Lines are commented out in place, never deleted, so the operator's list survives and any
+# single line can be restored by hand. Domains listed in /etc/geomask/zapret-force-keep.txt
+# are never touched - that is where the gaming exceptions live (wardogs / epic / pragmaengine
+# must keep being processed even though neighbouring names are tunneled).
+ZFORCE = '/opt/zapret/ipset/zapret-hosts-user.txt'
+ZKEEP  = '/etc/geomask/zapret-force-keep.txt'
+ZMK    = '# geomask: tunneled, DPI removed'
+TUNNEL_SET = set()
+
+def _zapret_force_sync():
+    if not TUNNEL_SET or not os.path.exists(ZFORCE):
+        return
+    keep = set()
+    if os.path.exists(ZKEEP):
+        keep = {l.strip().lower() for l in open(ZKEEP, encoding='utf-8', errors='replace')
+                if l.strip() and not l.strip().startswith('#')}
+    try:
+        lines = open(ZFORCE, encoding='utf-8', errors='replace').read().splitlines()
+    except Exception as e:
+        print('zapret force: cannot read (%s)' % e); return
+    out = []; moved = 0; restored = 0
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith(ZMK):
+            dom = s[len(ZMK):].strip().lower()
+            if dom in keep or dom not in TUNNEL_SET:
+                out.append(dom); restored += 1          # it came back into the clear
+            else:
+                out.append(ln)                          # still tunneled - keep commented
+            continue
+        if not s or s.startswith('#'):
+            out.append(ln); continue
+        dom = s.lower()
+        if dom in keep or dom not in TUNNEL_SET:
+            out.append(ln)
+        else:
+            out.append('%s %s' % (ZMK, dom)); moved += 1
+    if not moved and not restored:
+        print('zapret force: up-to-date'); return
+    try:
+        with open(ZFORCE + '.tmp', 'w', encoding='utf-8', newline='\n') as f:
+            f.write('\n'.join(out) + '\n')
+        os.replace(ZFORCE + '.tmp', ZFORCE)
+        print('zapret force: %d out of DPI, %d restored (reload needed)' % (moved, restored))
+    except Exception as e:
+        print('zapret force: write failed (%s)' % e)
+
 try:
     ZAPRET_CHANGED = _zapret_sync()
 except Exception as _ze:
     # a zapret problem must never block the mihomo ruleset sync
     ZAPRET_CHANGED = False
     print('zapret exclude: skipped (%s)' % _ze)
+try:
+    _zapret_force_sync()
+except Exception as _zf:
+    print('zapret force: skipped (%s)' % _zf)
 
 if c1 or c2 or c3 or c4:
     _r_ok = False
@@ -21018,7 +21076,25 @@ ASSET_EOF
   else
     info "torrentdirect list: keeping existing /etc/mihomo/ruleset/torrentdirect.yaml"
   fi
-  # v1.15.0: torrent admin - rebuild the tracker ruleset / toggle the DIRECT listener from the panel
+  # v1.20.4: zapret force-list exceptions (direction B). Owner-edited; never overwritten.
+  if [ -s "$(P /etc/geomask/zapret-force-keep.txt)" ]; then
+    info "zapret force-keep: keeping existing /etc/geomask/zapret-force-keep.txt"
+  else
+    mkdir -p "$(P /etc/geomask)" 2>/dev/null
+    save_stream /etc/geomask/zapret-force-keep.txt 644 <<'ASSET_EOF'
+# zapret force-list exceptions - geomask never removes these from DPI processing,
+# even when the same domain also appears in a tunneled MagiTrickle/AI list.
+#
+# Gaming services (owner, 01.11): these must keep being processed by zapret.
+# One domain per line. Editing this file is enough - the sync re-reads it every run,
+# and a domain that reappears here is automatically restored into the force list.
+api.epicgames.dev
+firstlook.gg
+live.wardogs.bulkhead.pragmaengine.com
+
+ASSET_EOF
+  fi
+  # v1.17.0: torrent admin - rebuild the tracker ruleset / toggle the DIRECT listener from the panel
   mkdir -p "$(P /etc/geomask/torrent)" 2>/dev/null
   save_stream /usr/bin/geomask-torrent.sh 755 <<'ASSET_EOF'
 #!/bin/sh
@@ -21571,7 +21647,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.20.3"
+GUARD_VERSION="1.20.4"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -21803,6 +21879,27 @@ bad_countries={c.strip().upper() for c in cfgd.get('bad_countries','RU,BY').spli
 bad_asns={('AS'+a.replace('AS','').strip().upper()) for a in cfgd.get('bad_asns','').split(',') if a.strip()}
 base_filter=cfgd.get('base_filter','Россия')
 provider=cfgd.get('sub_provider','sub')
+# v1.20.4: sub_provider=all -> scan every subscription, one child run each. Re-running the
+# wrapper per provider keeps the existing single-provider logic (and its rollback) untouched.
+_argv=sys.argv[1:]
+if '--provider' in _argv:
+    provider=_argv[_argv.index('--provider')+1]
+elif provider.strip()=='all':
+    _t=open(CFG, encoding='utf-8', errors='replace').read()
+    try:
+        _i=_t.index('\nproxy-providers:\n')
+    except ValueError:
+        log('sub_provider=all but no proxy-providers section'); sys.exit(1)
+    _head=_t[_i:]
+    _provs=[p for p in re.findall(r'^  ([A-Za-z0-9_-]+):\s*$', _head, re.M)
+            if re.search(r'^  %s:\n(?:.*\n)*?\s+url:' % re.escape(p), _head)]
+    log('scanning all %d providers: %s' % (len(_provs), ','.join(_provs)))
+    _rc=0
+    for _p in _provs:
+        r=subprocess.run([sys.executable if sys.argv[0].endswith('.py') else '/bin/sh',
+                          '/usr/bin/geomask-node-scan.sh', '--provider', _p])
+        if r.returncode not in (0,): _rc=r.returncode
+    sys.exit(_rc)
 # v1.13.7: the panel (Remnawave) serves a 1-node stub ("Приложение не поддерживается") to
 # unknown clients, so the scan must identify itself. clash-meta -> YAML, v2rayNG -> links.
 sub_ua=cfgd.get('sub_user_agent','clash-meta')
@@ -22055,8 +22152,8 @@ bad_asns=AS210976,AS215540,AS207847
 # needs the flag itself in this list (added 30.10 after an RU node slipped through).
 base_filter=Россия|Мобильный|РФ|Авто|Russia|Mobile|Auto|Албания|Хорватия|Литва|Латвия|Дания|Финляндия|Albania|Croatia|Lithuania|Latvia|Denmark|Finland|Turkey|United Kingdom|🇷🇺|без рекламы
 
-# provider name in mihomo config to scan
-sub_provider=sub
+# provider name in mihomo config to scan. "all" = every proxy-provider, one pass each (v1.20.4)
+sub_provider=all
 
 # User-Agent for fetching the subscription. The panel (Remnawave) answers a 1-node
 # stub "Приложение не поддерживается" to unknown clients, so this MUST be a known app.
@@ -22429,9 +22526,11 @@ window_min=30
 # "alive a long time, almost nothing downloaded". That is what these thresholds define:
 # a *.googlevideo.com connection routed DIRECT, older than stall_min_age seconds, with less
 # than stall_max_bytes downloaded (a bare TLS handshake is only a few KB).
-stall_min_age=25
+stall_min_age=5
 stall_max_bytes=10000
-# consecutive samples a stalled host must appear in before pinning (cron runs every 5 min)
+# consecutive samples a stalled host must appear in before pinning. The player itself fails
+# over within seconds, so the age threshold is 5s and the scan runs every minute (v1.20.4):
+# reaction is <= ~60s instead of the old ~5min.
 stall_threshold=1
 
 # Hard cap on automatically pinned hosts; when reached the watcher stops pinning and logs
@@ -22444,10 +22543,16 @@ ASSET_EOF
   else
     info "ytwatch conf: keeping existing /etc/geomask-ytwatch.conf"
   fi
+  # v1.20.4: the scan runs every minute (was */5). An old entry is rewritten in place.
   if crontab -l 2>/dev/null | grep -qE '# geomask-ytwatch$'; then
-    info "ytwatch cron already present"
+    if crontab -l 2>/dev/null | grep -qE '^\*/5 \* \* \* \* /usr/bin/geomask-ytwatch\.sh.*# geomask-ytwatch$'; then
+      ( crontab -l 2>/dev/null | sed 's|^\*/5 \* \* \* \* /usr/bin/geomask-ytwatch.sh|*/1 * * * * /usr/bin/geomask-ytwatch.sh|' ) | crontab - 2>/dev/null \
+        && info "ytwatch cron migrated */5 -> */1" || warn "cannot migrate the ytwatch cron"
+    else
+      info "ytwatch cron already present"
+    fi
   else
-    ( crontab -l 2>/dev/null; echo '*/5 * * * * /usr/bin/geomask-ytwatch.sh >/dev/null 2>&1 # geomask-ytwatch' ) | crontab - 2>/dev/null && info "cron added: */5 ytwatch" || warn "cannot set crontab"
+    ( crontab -l 2>/dev/null; echo '*/1 * * * * /usr/bin/geomask-ytwatch.sh >/dev/null 2>&1 # geomask-ytwatch' ) | crontab - 2>/dev/null && info "cron added: */1 ytwatch" || warn "cannot set crontab"
   fi
   if crontab -l 2>/dev/null | grep -qE '# geomask-ytwatch-reset$'; then
     info "ytwatch reset cron already present"

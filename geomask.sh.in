@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.20.3"
+GM_VERSION="1.20.4"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -1045,7 +1045,16 @@ ASSET_EOF
   else
     info "torrentdirect list: keeping existing /etc/mihomo/ruleset/torrentdirect.yaml"
   fi
-  # v1.15.0: torrent admin - rebuild the tracker ruleset / toggle the DIRECT listener from the panel
+  # v1.20.4: zapret force-list exceptions (direction B). Owner-edited; never overwritten.
+  if [ -s "$(P /etc/geomask/zapret-force-keep.txt)" ]; then
+    info "zapret force-keep: keeping existing /etc/geomask/zapret-force-keep.txt"
+  else
+    mkdir -p "$(P /etc/geomask)" 2>/dev/null
+    save_stream /etc/geomask/zapret-force-keep.txt 644 <<'ASSET_EOF'
+@@ASSET:zapret-force-keep.txt@@
+ASSET_EOF
+  fi
+  # v1.17.0: torrent admin - rebuild the tracker ruleset / toggle the DIRECT listener from the panel
   mkdir -p "$(P /etc/geomask/torrent)" 2>/dev/null
   save_stream /usr/bin/geomask-torrent.sh 755 <<'ASSET_EOF'
 @@ASSET:geomask-torrent.sh@@
@@ -1116,10 +1125,16 @@ ASSET_EOF
   else
     info "ytwatch conf: keeping existing /etc/geomask-ytwatch.conf"
   fi
+  # v1.20.4: the scan runs every minute (was */5). An old entry is rewritten in place.
   if crontab -l 2>/dev/null | grep -qE '# geomask-ytwatch$'; then
-    info "ytwatch cron already present"
+    if crontab -l 2>/dev/null | grep -qE '^\*/5 \* \* \* \* /usr/bin/geomask-ytwatch\.sh.*# geomask-ytwatch$'; then
+      ( crontab -l 2>/dev/null | sed 's|^\*/5 \* \* \* \* /usr/bin/geomask-ytwatch.sh|*/1 * * * * /usr/bin/geomask-ytwatch.sh|' ) | crontab - 2>/dev/null \
+        && info "ytwatch cron migrated */5 -> */1" || warn "cannot migrate the ytwatch cron"
+    else
+      info "ytwatch cron already present"
+    fi
   else
-    ( crontab -l 2>/dev/null; echo '*/5 * * * * /usr/bin/geomask-ytwatch.sh >/dev/null 2>&1 # geomask-ytwatch' ) | crontab - 2>/dev/null && info "cron added: */5 ytwatch" || warn "cannot set crontab"
+    ( crontab -l 2>/dev/null; echo '*/1 * * * * /usr/bin/geomask-ytwatch.sh >/dev/null 2>&1 # geomask-ytwatch' ) | crontab - 2>/dev/null && info "cron added: */1 ytwatch" || warn "cannot set crontab"
   fi
   if crontab -l 2>/dev/null | grep -qE '# geomask-ytwatch-reset$'; then
     info "ytwatch reset cron already present"

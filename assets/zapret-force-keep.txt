@@ -1,0 +1,9 @@
+# zapret force-list exceptions - geomask never removes these from DPI processing,
+# even when the same domain also appears in a tunneled MagiTrickle/AI list.
+#
+# Gaming services (owner, 01.11): these must keep being processed by zapret.
+# One domain per line. Editing this file is enough - the sync re-reads it every run,
+# and a domain that reappears here is automatically restored into the force list.
+api.epicgames.dev
+firstlook.gg
+live.wardogs.bulkhead.pragmaengine.com

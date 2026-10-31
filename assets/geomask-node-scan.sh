@@ -33,6 +33,27 @@ bad_countries={c.strip().upper() for c in cfgd.get('bad_countries','RU,BY').spli
 bad_asns={('AS'+a.replace('AS','').strip().upper()) for a in cfgd.get('bad_asns','').split(',') if a.strip()}
 base_filter=cfgd.get('base_filter','Россия')
 provider=cfgd.get('sub_provider','sub')
+# v1.20.4: sub_provider=all -> scan every subscription, one child run each. Re-running the
+# wrapper per provider keeps the existing single-provider logic (and its rollback) untouched.
+_argv=sys.argv[1:]
+if '--provider' in _argv:
+    provider=_argv[_argv.index('--provider')+1]
+elif provider.strip()=='all':
+    _t=open(CFG, encoding='utf-8', errors='replace').read()
+    try:
+        _i=_t.index('\nproxy-providers:\n')
+    except ValueError:
+        log('sub_provider=all but no proxy-providers section'); sys.exit(1)
+    _head=_t[_i:]
+    _provs=[p for p in re.findall(r'^  ([A-Za-z0-9_-]+):\s*$', _head, re.M)
+            if re.search(r'^  %s:\n(?:.*\n)*?\s+url:' % re.escape(p), _head)]
+    log('scanning all %d providers: %s' % (len(_provs), ','.join(_provs)))
+    _rc=0
+    for _p in _provs:
+        r=subprocess.run([sys.executable if sys.argv[0].endswith('.py') else '/bin/sh',
+                          '/usr/bin/geomask-node-scan.sh', '--provider', _p])
+        if r.returncode not in (0,): _rc=r.returncode
+    sys.exit(_rc)
 # v1.13.7: the panel (Remnawave) serves a 1-node stub ("Приложение не поддерживается") to
 # unknown clients, so the scan must identify itself. clash-meta -> YAML, v2rayNG -> links.
 sub_ua=cfgd.get('sub_user_agent','clash-meta')

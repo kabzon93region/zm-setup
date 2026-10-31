@@ -793,6 +793,36 @@ grep -qF "name_filter_groups='VPN,VPN-noP2P'" "$HERE/../assets/geomask-nodes.con
   && { echo "PASS: S27 AI is excluded from name filtering by default"; pass=$((pass+1)); } \
   || { echo "FAIL: S27 AI could be emptied by the name filter"; failn=$((failn+1)); }
 
+# v1.20.4: scan all subscriptions, zapret direction B, seconds-fast YouTube failover
+grep -qF "sub_provider=all" "$HERE/../assets/geomask-nodes.conf" \
+  && { echo "PASS: S27 nightly scan covers every subscription by default"; pass=$((pass+1)); } \
+  || { echo "FAIL: S27 nightly scan still reads one subscription"; failn=$((failn+1)); }
+grep -qF "elif provider.strip()=='all'" "$HERE/../assets/geomask-node-scan.sh" \
+  && grep -qF "'--provider'" "$HERE/../assets/geomask-node-scan.sh" \
+  && { echo "PASS: S27 scan fans out per provider via --provider"; pass=$((pass+1)); } \
+  || { echo "FAIL: S27 scan has no fan-out implementation"; failn=$((failn+1)); }
+grep -qF 'def _zapret_force_sync' "$HERE/../assets/sync_mtrickle_mihomo.sh" \
+  && { echo "PASS: S28 sync implements zapret direction B"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 direction B is missing"; failn=$((failn+1)); }
+grep -qF "out.append('%s %s' % (ZMK, dom))" "$HERE/../assets/sync_mtrickle_mihomo.sh" \
+  && { echo "PASS: S28 force list is commented in place, not rewritten"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 would drop operator lines"; failn=$((failn+1)); }
+for _d in api.epicgames.dev firstlook.gg live.wardogs.bulkhead.pragmaengine.com; do
+  grep -qF "$_d" "$HERE/../assets/zapret-force-keep.txt" \
+    && { echo "PASS: S28 wardogs exception kept: $_d"; pass=$((pass+1)); } \
+    || { echo "FAIL: S28 missing exception: $_d"; failn=$((failn+1)); }
+done
+grep -qF 'zapret force: skipped' "$HERE/../assets/sync_mtrickle_mihomo.sh" \
+  && { echo "PASS: S28 direction B cannot break the ruleset sync"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 direction B is unguarded"; failn=$((failn+1)); }
+grep -qF 'stall_min_age=5' "$HERE/../assets/geomask-ytwatch.conf" \
+  && { echo "PASS: S28 youtube failover threshold is 5 seconds"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 youtube threshold still slow"; failn=$((failn+1)); }
+grep -qF '*/1 * * * * /usr/bin/geomask-ytwatch.sh' "$HERE/../geomask.sh.in" \
+  && grep -qF 'ytwatch cron migrated */5 -> */1' "$HERE/../geomask.sh.in" \
+  && { echo "PASS: S28 ytwatch cron is */1 and migrates old entries"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 ytwatch cron still 5 min or does not migrate"; failn=$((failn+1)); }
+
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="
 [ "$failn" -eq 0 ]

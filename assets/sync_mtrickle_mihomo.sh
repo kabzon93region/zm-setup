@@ -269,6 +269,8 @@ def _zapret_sync():
     tunnel |= {d for d in (bare(p) for p in ytvpn_payload) if d}
     tunnel = tunnel - pinned_direct
     tunnel = {d for d in tunnel if re.fullmatch(r'[a-z0-9.\-\u0080-\uffff]+', d)}
+    global TUNNEL_SET
+    TUNNEL_SET = set(tunnel)          # direction B below works on exactly this set
     if not tunnel:
         print('zapret: nothing to exclude - skip'); return False
     try:
@@ -299,12 +301,68 @@ def _zapret_sync():
     except Exception as e:
         print('zapret exclude: write failed (%s)' % e); return False
 
+# ---------------------------------------------------------------------------
+# v1.20.4: zapret direction B - a domain that leaves through the tunnel must NOT stay in
+# zapret's FORCE list. Forcing DPI on it is pointless (the WAN only sees the encrypted hop to
+# the proxy) and harmful: the fake packets land on the proxy connection, not on the site.
+#
+# Lines are commented out in place, never deleted, so the operator's list survives and any
+# single line can be restored by hand. Domains listed in /etc/geomask/zapret-force-keep.txt
+# are never touched - that is where the gaming exceptions live (wardogs / epic / pragmaengine
+# must keep being processed even though neighbouring names are tunneled).
+ZFORCE = '/opt/zapret/ipset/zapret-hosts-user.txt'
+ZKEEP  = '/etc/geomask/zapret-force-keep.txt'
+ZMK    = '# geomask: tunneled, DPI removed'
+TUNNEL_SET = set()
+
+def _zapret_force_sync():
+    if not TUNNEL_SET or not os.path.exists(ZFORCE):
+        return
+    keep = set()
+    if os.path.exists(ZKEEP):
+        keep = {l.strip().lower() for l in open(ZKEEP, encoding='utf-8', errors='replace')
+                if l.strip() and not l.strip().startswith('#')}
+    try:
+        lines = open(ZFORCE, encoding='utf-8', errors='replace').read().splitlines()
+    except Exception as e:
+        print('zapret force: cannot read (%s)' % e); return
+    out = []; moved = 0; restored = 0
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith(ZMK):
+            dom = s[len(ZMK):].strip().lower()
+            if dom in keep or dom not in TUNNEL_SET:
+                out.append(dom); restored += 1          # it came back into the clear
+            else:
+                out.append(ln)                          # still tunneled - keep commented
+            continue
+        if not s or s.startswith('#'):
+            out.append(ln); continue
+        dom = s.lower()
+        if dom in keep or dom not in TUNNEL_SET:
+            out.append(ln)
+        else:
+            out.append('%s %s' % (ZMK, dom)); moved += 1
+    if not moved and not restored:
+        print('zapret force: up-to-date'); return
+    try:
+        with open(ZFORCE + '.tmp', 'w', encoding='utf-8', newline='\n') as f:
+            f.write('\n'.join(out) + '\n')
+        os.replace(ZFORCE + '.tmp', ZFORCE)
+        print('zapret force: %d out of DPI, %d restored (reload needed)' % (moved, restored))
+    except Exception as e:
+        print('zapret force: write failed (%s)' % e)
+
 try:
     ZAPRET_CHANGED = _zapret_sync()
 except Exception as _ze:
     # a zapret problem must never block the mihomo ruleset sync
     ZAPRET_CHANGED = False
     print('zapret exclude: skipped (%s)' % _ze)
+try:
+    _zapret_force_sync()
+except Exception as _zf:
+    print('zapret force: skipped (%s)' % _zf)
 
 if c1 or c2 or c3 or c4:
     _r_ok = False
