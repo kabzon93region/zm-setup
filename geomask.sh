@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.20.4"
+GM_VERSION="1.20.5"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.20.4"
+BACKEND_VERSION="1.20.5"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.20.4';
+var PANEL_VERSION = '1.20.5';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -21647,7 +21647,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.20.4"
+GUARD_VERSION="1.20.5"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -21851,14 +21851,19 @@ ASSET_EOF
 # exact names to the VPN group exclude-filter, unblocks clean ones, validates
 # (mihomo -t) and hot-reloads ONLY when the filter changed. Never selects nodes,
 # never touches traffic. Config: /etc/geomask-nodes.conf.
-exec python3 - <<'PYEOF'
+# OpenWrt has python3; a Windows sandbox may only expose "python" (a Store alias is not always
+# executable from sh), so fall back rather than dying at exec with "python3: not found".
+if python3 -c 'pass' >/dev/null 2>&1; then _py=python3; else _py=python; fi
+exec "$_py" - "$@" <<'PYEOF'
 import re, sys, json, time, urllib.request, urllib.parse, subprocess, os
 
-CONF='/etc/geomask-nodes.conf'
-CFG='/etc/mihomo/config.yaml'
-BLOCKF='/etc/geomask-node-block.txt'
-STATE='/tmp/geomask-nodescan.state'
-LOG='/root/geo-sync.log'
+# every path is env-overridable so the script can be exercised by the sandbox tests
+_E=os.environ
+CONF=_E.get('GM_NODES_CONF','/etc/geomask-nodes.conf')
+CFG=_E.get('GM_MIHOMO_CFG','/etc/mihomo/config.yaml')
+BLOCKF=_E.get('GM_NODES_BLOCK','/etc/geomask-node-block.txt')
+STATE=_E.get('GM_NODES_STATE','/tmp/geomask-nodescan.state')
+LOG=_E.get('GM_NODES_LOG','/root/geo-sync.log')
 
 def log(msg):
     line='%s NODESCAN %s\n' % (time.strftime('%F %T'), msg)
@@ -21882,6 +21887,20 @@ provider=cfgd.get('sub_provider','sub')
 # v1.20.4: sub_provider=all -> scan every subscription, one child run each. Re-running the
 # wrapper per provider keeps the existing single-provider logic (and its rollback) untouched.
 _argv=sys.argv[1:]
+# testability: --list-providers runs the enumeration only (used by the sandbox tests, so a
+# broken regex cannot silently scan nothing again)
+if '--list-providers' in _argv:
+    _t=open(os.environ.get('GM_MIHOMO_CFG', CFG), encoding='utf-8', errors='replace').read()
+    try:
+        _i=_t.index('\nproxy-providers:\n')
+    except ValueError:
+        print(''); sys.exit(1)
+    _h=_t[_i:]
+    _n=re.search(r'\n(?=[a-z])', _h[1:])
+    if _n: _h=_h[:_n.start()+1]
+    print(','.join(p for p in re.findall(r'^  ([A-Za-z0-9_-]+):\s*$', _h, re.M)
+                   if re.search(r'^  %s:\n(?:.*\n)*?\s+url:' % re.escape(p), _h, re.M)))
+    sys.exit(0)
 if '--provider' in _argv:
     provider=_argv[_argv.index('--provider')+1]
 elif provider.strip()=='all':
@@ -21891,8 +21910,16 @@ elif provider.strip()=='all':
     except ValueError:
         log('sub_provider=all but no proxy-providers section'); sys.exit(1)
     _head=_t[_i:]
+    # stop at the next top-level key so rule-providers entries cannot be mistaken for proxies
+    _nxt=re.search(r'\n(?=[a-z])', _head[1:])
+    if _nxt: _head=_head[:_nxt.start()+1]
+    # NOTE: both searches need re.M - without it "^" only matches the very start of the string
+    # and the list silently came back empty ("scanning all 0 providers").
     _provs=[p for p in re.findall(r'^  ([A-Za-z0-9_-]+):\s*$', _head, re.M)
-            if re.search(r'^  %s:\n(?:.*\n)*?\s+url:' % re.escape(p), _head)]
+            if re.search(r'^  %s:\n(?:.*\n)*?\s+url:' % re.escape(p), _head, re.M)]
+    if not _provs:
+        log('sub_provider=all but no proxy-provider with a url was found - refusing to no-op')
+        sys.exit(1)
     log('scanning all %d providers: %s' % (len(_provs), ','.join(_provs)))
     _rc=0
     for _p in _provs:

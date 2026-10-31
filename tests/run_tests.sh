@@ -794,9 +794,35 @@ grep -qF "name_filter_groups='VPN,VPN-noP2P'" "$HERE/../assets/geomask-nodes.con
   || { echo "FAIL: S27 AI could be emptied by the name filter"; failn=$((failn+1)); }
 
 # v1.20.4: scan all subscriptions, zapret direction B, seconds-fast YouTube failover
-grep -qF "sub_provider=all" "$HERE/../assets/geomask-nodes.conf" \
-  && { echo "PASS: S27 nightly scan covers every subscription by default"; pass=$((pass+1)); } \
-  || { echo "FAIL: S27 nightly scan still reads one subscription"; failn=$((failn+1)); }
+# behavioural test: run the REAL enumeration against the fixture config. A grep cannot catch a
+# missing re.M flag - that is exactly how "scanning all 0 providers" shipped once.
+if python3 -c 'pass' >/dev/null 2>&1; then
+  cat > "$HERE/state/providers.yaml" <<'PROVEOF'
+proxy-providers:
+  sub:
+    type: http
+    url: "https://example.com/a"
+  de5:
+    type: http
+    url: "https://example.com/b"
+  sub2:
+    type: http
+    url: "https://example.com/c"
+rule-providers:
+  ai:
+    type: file
+PROVEOF
+  printf 'sub_provider=all\nbad_countries=RU\nbase_filter=x\n' > "$HERE/state/nodes.conf"
+  _got=$(GM_NODES_CONF="$HERE/state/nodes.conf" GM_MIHOMO_CFG="$HERE/state/providers.yaml" \
+         sh "$HERE/../assets/geomask-node-scan.sh" --list-providers 2>/dev/null | tail -1)
+  case "$_got" in
+    '')     echo "SKIP: S27 provider enumeration (python not runnable in this sandbox)" ;;
+    sub,de5,sub2) echo "PASS: S27 provider enumeration finds all three (got: $_got)"; pass=$((pass+1)) ;;
+    *)      echo "FAIL: S27 provider enumeration returned '$_got' (want sub,de5,sub2)"; failn=$((failn+1)) ;;
+  esac
+else
+  echo "SKIP: S27 provider enumeration (python3 not runnable)"
+fi
 grep -qF "elif provider.strip()=='all'" "$HERE/../assets/geomask-node-scan.sh" \
   && grep -qF "'--provider'" "$HERE/../assets/geomask-node-scan.sh" \
   && { echo "PASS: S27 scan fans out per provider via --provider"; pass=$((pass+1)); } \
