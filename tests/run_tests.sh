@@ -779,6 +779,20 @@ grep -qF 'a zapret problem must never block the mihomo ruleset sync' "$HERE/../a
   && { echo "PASS: S26 zapret errors cannot break the ruleset sync"; pass=$((pass+1)); } \
   || { echo "FAIL: S26 a zapret error would abort the sync"; failn=$((failn+1)); }
 
+# v1.20.3: the node filter must reach every VPN slot, must not be appended with duplicates,
+# and must never be applied to the AI slot (its subscription is USA-only - a name list tuned
+# to another provider emptied it to one pseudo-node when that was done by mistake).
+grep -qF 'def apply_filter_all' "$HERE/../assets/geomask-node-scan.sh" \
+  && grep -qF 'def group_blocks' "$HERE/../assets/geomask-node-scan.sh" \
+  && { echo "PASS: S27 scan writes the filter per group, not per line"; pass=$((pass+1)); } \
+  || { echo "FAIL: S27 scan still rewrites the first exclude-filter it finds"; failn=$((failn+1)); }
+grep -qF 'if p and p not in seen' "$HERE/../assets/geomask-node-scan.sh" \
+  && { echo "PASS: S27 filter alternations are de-duplicated"; pass=$((pass+1)); } \
+  || { echo "FAIL: S27 the filter grows duplicated terms each run"; failn=$((failn+1)); }
+grep -qF "name_filter_groups='VPN,VPN-noP2P'" "$HERE/../assets/geomask-nodes.conf" \
+  && { echo "PASS: S27 AI is excluded from name filtering by default"; pass=$((pass+1)); } \
+  || { echo "FAIL: S27 AI could be emptied by the name filter"; failn=$((failn+1)); }
+
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="
 [ "$failn" -eq 0 ]

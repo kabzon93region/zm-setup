@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.20.2"
+GM_VERSION="1.20.3"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.20.2"
+BACKEND_VERSION="1.20.3"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.20.2';
+var PANEL_VERSION = '1.20.3';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -21571,7 +21571,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.20.2"
+GUARD_VERSION="1.20.3"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -21930,26 +21930,67 @@ for name, srv in nodes:
     if bad:
         blocked.add(name)
 
-# compose exclude-filter: base + exact blocked names (regex-escaped)
-parts=[base_filter.strip()] if base_filter.strip() else []
-for nm in sorted(blocked):
-    parts.append(re.escape(nm))
+# compose exclude-filter: base + exact blocked names (regex-escaped), de-duplicated.
+# The previous version appended every blocked name on each run without deduplicating, so the
+# alternation grew junk like "Russia|Mobile|RF|Auto|Russia|Mobile|Auto|..." - and once it even
+# collected "USA", which emptied the AI group. Order is kept stable so the file does not churn.
+seen=set(); parts=[]
+for raw in ([base_filter.strip()] if base_filter.strip() else []) + [re.escape(n) for n in sorted(blocked)]:
+    for p in raw.split('|'):
+        p=p.strip()
+        if p and p not in seen:
+            seen.add(p); parts.append(p)
 new_filter='|'.join(parts)
 
-def apply_filter(cfgtext, filt):
-    # YAML single-quoted scalar: backslashes are literal (Go regex needs them);
-    # embedded single quotes would be doubled (names never contain them, kept safe anyway)
-    esc=filt.replace("'", "''")
-    m=re.search(r'^ *exclude-filter:.*$', cfgtext, re.M)
-    if not m: return cfgtext, False, False
-    indent=re.match(r'^ *', m.group(0)).group(0)
-    new_line='%sexclude-filter: '"'"'%s'"'"'' % (indent, esc)
-    out=cfgtext[:m.start()]+new_line+cfgtext[m.end():]
-    return out, out!=cfgtext, True
+def group_blocks(cfgtext):
+    """yield (group_name, start, end) for every proxy-groups entry"""
+    try: i=cfgtext.index('\nproxy-groups:\n')
+    except ValueError: return
+    body_start=i+15
+    lines=cfgtext[body_start:].split('\n')
+    pos=0; name=None; start=None
+    for ln in lines:
+        if ln and not ln.startswith(' '):
+            break
+        g=re.match(r'^  - name:\s*(\S.*)$', ln)
+        if g:
+            if name is not None: yield (name, start, pos)
+            name=g.group(1).strip().strip('"\''); start=pos
+        pos+=len(ln)+1
+    if name is not None: yield (name, start, pos)
 
-out, changed, found = apply_filter(text, new_filter)
-if not found:
-    log('exclude-filter line not found in config - nothing done'); sys.exit(1)
+def provider_of_block(blk):
+    u=re.search(r'use:\n((?:[ ]{6}-\s+\S+\n?)+)', blk)
+    return re.findall(r'-\s+(\S+)', u.group(1))[0] if u else None
+
+def apply_filter_all(cfgtext, filt, prov, name_filter_groups):
+    """write the filter into every GROUP that uses this provider. Never listeners, never a
+    group that is not listed in name_filter_groups for the base part."""
+    esc=filt.replace("'", "''")
+    line="    exclude-filter: '%s'" % esc
+    out=[]; cursor=0; touched=0
+    for name, s, e in group_blocks(cfgtext):
+        blk=cfgtext[s:e]
+        if provider_of_block(blk) != prov:
+            continue
+        if name not in name_filter_groups:
+            continue
+        cleaned='\n'.join(l for l in blk.split('\n') if 'exclude-filter' not in l)
+        # insert right after the "use:" list so the YAML stays readable
+        ul=re.search(r'(use:\n(?:[ ]{6}-\s+\S+\n)+)', cleaned)
+        ins = ul.end() if ul else len(cleaned)
+        newblk=cleaned[:ins]+line+'\n'+cleaned[ins:]
+        if newblk != blk:
+            out.append(cfgtext[cursor:s]); out.append(newblk); cursor=e; touched+=1
+    out.append(cfgtext[cursor:])
+    joined=''.join(out)
+    return joined, (joined != cfgtext), touched
+
+NFG=[g.strip() for g in cfgd.get('name_filter_groups','VPN,VPN-noP2P').split(',') if g.strip()]
+out, changed, touched = apply_filter_all(text, new_filter, provider, NFG)
+if touched == 0:
+    log('no group using provider %s accepts a name filter (name_filter_groups=%s) - nothing done'
+        % (provider, ','.join(NFG))); sys.exit(1)
 applied=False
 if changed:
     open(CFG+'.bak_nodescan','w',encoding='utf-8').write(text)
@@ -22021,6 +22062,12 @@ sub_provider=sub
 # stub "Приложение не поддерживается" to unknown clients, so this MUST be a known app.
 # clash-meta -> YAML config; v2rayNG/NekoBox/kitsunebi -> base64 share links.
 sub_user_agent=clash-meta
+
+# Groups allowed to carry a NAME filter (v1.20.3). Deliberately excludes the AI slot: that
+# subscription is USA-only, and a name list tuned to another provider's naming emptied the group
+# to a single pseudo-node when it was applied there by mistake. Geo/ASN rules still apply to
+# every subscription - only the name filter is scoped here.
+name_filter_groups='VPN,VPN-noP2P'
 
 ASSET_EOF
   else
