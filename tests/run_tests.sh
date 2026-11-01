@@ -1026,6 +1026,18 @@ grep -qF '${GM_AUTO_LANE:-}' "$HERE/../geomask.sh.in" \
   && { echo "PASS: S38 GM_AUTO_LANE has a nounset-safe default"; pass=$((pass+1)); } \
   || { echo "FAIL: S38 GM_AUTO_LANE is bare again"; failn=$((failn+1)); }
 
+# v1.22.5: blanket is a standing decision, not an escalation the watchdog can undo
+grep -qF 'blanket_permanent' "$HERE/../assets/geomask-ytwatch.sh" \
+  && { echo "PASS: S39 the blanket can be made permanent"; pass=$((pass+1)); } \
+  || { echo "FAIL: S39 the watchdog would still downgrade the blanket on its own"; failn=$((failn+1)); }
+grep -qF 'blanket_permanent=1' "$HERE/../assets/geomask-ytwatch.conf" \
+  && { echo "PASS: S39 shipped config keeps all googlevideo on the VPN"; pass=$((pass+1)); } \
+  || { echo "FAIL: S39 the shipped config still starts in per-edge mode"; failn=$((failn+1)); }
+# a pin that belongs to a tunneled name must not be judged by a direct probe
+grep -qF 'is_tunneled' "$HERE/../assets/geomask-dnscheck.sh" \
+  && { echo "PASS: S39 tunneled pins are probed through the lane, not directly"; pass=$((pass+1)); } \
+  || { echo "FAIL: S39 the pin check will cry wolf on AI pins"; failn=$((failn+1)); }
+
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="
 [ "$failn" -eq 0 ]

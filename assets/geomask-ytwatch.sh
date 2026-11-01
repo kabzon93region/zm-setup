@@ -55,6 +55,11 @@ stall_min_conns=max(1,int(cfgd.get('stall_min_conns','3')))
 blanket_when=max(2,int(cfgd.get('blanket_when','4')))
 # clean samples required before the blanket rule is taken back down
 blanket_off=max(1,int(cfgd.get('blanket_off_after','20')))
+# v1.22.5: owner decision (01.11) - keep the WHOLE googlevideo.com namespace on the VPN all the
+# time instead of only escalating when many edges stall. Per-edge pinning can never win a race
+# against Google's rotation, so the selective mode was always a best-effort compromise.
+# With this on, the watchdog keeps measuring and reporting but never takes the blanket away.
+blanket_permanent = str(cfgd.get('blanket_permanent','0')).strip() in ('1','true','yes','on')
 
 # ---------- MagiTrickle API over unix socket (handles chunked responses) ----------
 class U(http.client.HTTPConnection):
@@ -309,14 +314,22 @@ def do_scan():
         st['clean_samples']=0
     else:
         if blanket:
-            n=int(st.get('clean_samples',0))+1
-            st['clean_samples']=n
-            if n >= blanket_off:
-                log('blanket: %d clean samples - back to per-edge auto' % n)
-                set_mode('auto'); st['clean_samples']=0
-                save_state(st); return
+            if blanket_permanent:
+                # owner asked for the whole domain on the VPN permanently: keep measuring,
+                # never take the blanket back down
+                st['clean_samples']=0
+            else:
+                n=int(st.get('clean_samples',0))+1
+                st['clean_samples']=n
+                if n >= blanket_off:
+                    log('blanket: %d clean samples - back to per-edge auto' % n)
+                    set_mode('auto'); st['clean_samples']=0
+                    save_state(st); return
         else:
             st['clean_samples']=0
+            if blanket_permanent:
+                log('blanket_permanent=1 but the blanket rule is gone - restoring it')
+                set_mode('blanket'); save_state(st); return
     # a stalled connection is a per-sample observation: count consecutive sightings so one
     # transient sample cannot pin an edge on its own
     seen={h:int(n) for h,n in (st.get('stall_seen') or {}).items() if h not in edges}

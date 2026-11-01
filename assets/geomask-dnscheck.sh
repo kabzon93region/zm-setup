@@ -101,27 +101,58 @@ if [ "$QUICK" = "--quick" ]; then
   echo "  skipped liveness probe (--quick)"
 else
 python3 - <<'PY'
-import socket
-dead=[]; alive=0; seen=set()
+import socket, os, re, subprocess
+# A pin whose names are routed through a subscription cannot be judged from the router: the
+# whole point of those addresses is that a foreign exit reaches them. Probing them directly
+# produced a false alarm for the AI pins (45.155.204.190), so tunneled names are now tested
+# through the local proxy chain instead, and only non-tunneled names are judged directly.
+tunneled=set()
+for f in os.listdir('/etc/mihomo/ruleset') if os.path.isdir('/etc/mihomo/ruleset') else []:
+    if not f.endswith('.yaml'): continue
+    try: txt=open('/etc/mihomo/ruleset/'+f, encoding='utf-8', errors='replace').read()
+    except Exception: continue
+    for m in re.finditer(r'DOMAIN-SUFFIX,\s*([a-z0-9.\-]+)', txt):
+        tunneled.add(m.group(1).lower())
+def is_tunneled(names):
+    return any(n == t or n.endswith('.'+t) for n in names for t in tunneled)
+def via_chain(host):
+    try:
+        out=subprocess.run(['curl','-s','-o','/dev/null','-m','12','-x','http://127.0.0.1:7894',
+                            '-w','%{http_code}','https://%s/'%host], capture_output=True, text=True).stdout
+        return out.isdigit() and out != '000'
+    except Exception:
+        return False
+dead_direct=[]; dead_chain=[]; alive=0; tun=0
+seen=set()
 for ln in open('/etc/hosts', encoding='utf-8', errors='replace'):
     ln=ln.strip()
     if not ln or ln.startswith('#'): continue
     p=ln.split()
     if len(p) < 2: continue
-    ip=p[0]
+    ip=p[0]; names=[x.lower() for x in p[1:]]
     if not ip[0].isdigit() or ip in ('127.0.0.1','0.0.0.0') or ip in seen: continue
     seen.add(ip)
+    if is_tunneled(names):
+        tun += 1
+        host=names[0]
+        if not via_chain(host): dead_chain.append((ip, host))
+        else: alive += 1
+        continue
     ok=False
     for port in (443, 80):
         try:
             s=socket.create_connection((ip,port), timeout=3); s.close(); ok=True; break
         except Exception: pass
-    if ok: alive+=1
-    else: dead.append((ip, p[1], len(p)-1))
-print('  live pinned addresses: %d, unreachable: %d' % (alive, len(dead)))
-for ip, host, n in dead[:10]:
-    print('  WARN  %s (serves %d name%s) does not answer on 443/80 - clients dial a dead address'
-          % (ip, n, 's' if n>1 else ''))
+    if ok: alive += 1
+    else: dead_direct.append((ip, names[0], len(names)))
+print('  pinned addresses: %d total (%d of them belong to tunneled names)' % (len(seen), tun))
+for ip, host in dead_chain:
+    print('  WARN  %s (%s) is pinned and tunneled, but the chain cannot reach it either' % (ip, host))
+for ip, host, n in dead_direct[:10]:
+    print('  WARN  %s (serves %d name%s, e.g. %s) answers neither directly - clients dial a dead address'
+          % (ip, n, 's' if n>1 else '', host))
+if not dead_chain and not dead_direct:
+    print('  all pins reachable (directly, or through the lane that serves them)')
 PY
 fi
 

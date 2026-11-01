@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.22.4"
+GM_VERSION="1.22.5"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.22.4"
+BACKEND_VERSION="1.22.5"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.22.4';
+var PANEL_VERSION = '1.22.5';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -21539,27 +21539,58 @@ if [ "$QUICK" = "--quick" ]; then
   echo "  skipped liveness probe (--quick)"
 else
 python3 - <<'PY'
-import socket
-dead=[]; alive=0; seen=set()
+import socket, os, re, subprocess
+# A pin whose names are routed through a subscription cannot be judged from the router: the
+# whole point of those addresses is that a foreign exit reaches them. Probing them directly
+# produced a false alarm for the AI pins (45.155.204.190), so tunneled names are now tested
+# through the local proxy chain instead, and only non-tunneled names are judged directly.
+tunneled=set()
+for f in os.listdir('/etc/mihomo/ruleset') if os.path.isdir('/etc/mihomo/ruleset') else []:
+    if not f.endswith('.yaml'): continue
+    try: txt=open('/etc/mihomo/ruleset/'+f, encoding='utf-8', errors='replace').read()
+    except Exception: continue
+    for m in re.finditer(r'DOMAIN-SUFFIX,\s*([a-z0-9.\-]+)', txt):
+        tunneled.add(m.group(1).lower())
+def is_tunneled(names):
+    return any(n == t or n.endswith('.'+t) for n in names for t in tunneled)
+def via_chain(host):
+    try:
+        out=subprocess.run(['curl','-s','-o','/dev/null','-m','12','-x','http://127.0.0.1:7894',
+                            '-w','%{http_code}','https://%s/'%host], capture_output=True, text=True).stdout
+        return out.isdigit() and out != '000'
+    except Exception:
+        return False
+dead_direct=[]; dead_chain=[]; alive=0; tun=0
+seen=set()
 for ln in open('/etc/hosts', encoding='utf-8', errors='replace'):
     ln=ln.strip()
     if not ln or ln.startswith('#'): continue
     p=ln.split()
     if len(p) < 2: continue
-    ip=p[0]
+    ip=p[0]; names=[x.lower() for x in p[1:]]
     if not ip[0].isdigit() or ip in ('127.0.0.1','0.0.0.0') or ip in seen: continue
     seen.add(ip)
+    if is_tunneled(names):
+        tun += 1
+        host=names[0]
+        if not via_chain(host): dead_chain.append((ip, host))
+        else: alive += 1
+        continue
     ok=False
     for port in (443, 80):
         try:
             s=socket.create_connection((ip,port), timeout=3); s.close(); ok=True; break
         except Exception: pass
-    if ok: alive+=1
-    else: dead.append((ip, p[1], len(p)-1))
-print('  live pinned addresses: %d, unreachable: %d' % (alive, len(dead)))
-for ip, host, n in dead[:10]:
-    print('  WARN  %s (serves %d name%s) does not answer on 443/80 - clients dial a dead address'
-          % (ip, n, 's' if n>1 else ''))
+    if ok: alive += 1
+    else: dead_direct.append((ip, names[0], len(names)))
+print('  pinned addresses: %d total (%d of them belong to tunneled names)' % (len(seen), tun))
+for ip, host in dead_chain:
+    print('  WARN  %s (%s) is pinned and tunneled, but the chain cannot reach it either' % (ip, host))
+for ip, host, n in dead_direct[:10]:
+    print('  WARN  %s (serves %d name%s, e.g. %s) answers neither directly - clients dial a dead address'
+          % (ip, n, 's' if n>1 else '', host))
+if not dead_chain and not dead_direct:
+    print('  all pins reachable (directly, or through the lane that serves them)')
 PY
 fi
 
@@ -22176,7 +22207,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.22.4"
+GUARD_VERSION="1.22.5"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -22837,6 +22868,11 @@ stall_min_conns=max(1,int(cfgd.get('stall_min_conns','3')))
 blanket_when=max(2,int(cfgd.get('blanket_when','4')))
 # clean samples required before the blanket rule is taken back down
 blanket_off=max(1,int(cfgd.get('blanket_off_after','20')))
+# v1.22.5: owner decision (01.11) - keep the WHOLE googlevideo.com namespace on the VPN all the
+# time instead of only escalating when many edges stall. Per-edge pinning can never win a race
+# against Google's rotation, so the selective mode was always a best-effort compromise.
+# With this on, the watchdog keeps measuring and reporting but never takes the blanket away.
+blanket_permanent = str(cfgd.get('blanket_permanent','0')).strip() in ('1','true','yes','on')
 
 # ---------- MagiTrickle API over unix socket (handles chunked responses) ----------
 class U(http.client.HTTPConnection):
@@ -23091,14 +23127,22 @@ def do_scan():
         st['clean_samples']=0
     else:
         if blanket:
-            n=int(st.get('clean_samples',0))+1
-            st['clean_samples']=n
-            if n >= blanket_off:
-                log('blanket: %d clean samples - back to per-edge auto' % n)
-                set_mode('auto'); st['clean_samples']=0
-                save_state(st); return
+            if blanket_permanent:
+                # owner asked for the whole domain on the VPN permanently: keep measuring,
+                # never take the blanket back down
+                st['clean_samples']=0
+            else:
+                n=int(st.get('clean_samples',0))+1
+                st['clean_samples']=n
+                if n >= blanket_off:
+                    log('blanket: %d clean samples - back to per-edge auto' % n)
+                    set_mode('auto'); st['clean_samples']=0
+                    save_state(st); return
         else:
             st['clean_samples']=0
+            if blanket_permanent:
+                log('blanket_permanent=1 but the blanket rule is gone - restoring it')
+                set_mode('blanket'); save_state(st); return
     # a stalled connection is a per-sample observation: count consecutive sightings so one
     # transient sample cannot pin an edge on its own
     seen={h:int(n) for h,n in (st.get('stall_seen') or {}).items() if h not in edges}
@@ -23191,6 +23235,9 @@ stall_threshold=4
 # down automatically after blanket_off_after clean samples (~20 minutes).
 blanket_when=4
 blanket_off_after=20
+# v1.22.5: owner decision - keep ALL of googlevideo.com on the VPN all the time.
+# 1 = never downgrade to per-edge mode, and restore the blanket rule if it disappears.
+blanket_permanent=1
 
 # Hard cap on automatically pinned hosts; when reached the watcher stops pinning and logs
 max_pins=40
