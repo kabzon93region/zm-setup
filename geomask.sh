@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.21.4"
+GM_VERSION="1.21.5"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.21.4"
+BACKEND_VERSION="1.21.5"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.21.4';
+var PANEL_VERSION = '1.21.5';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -20315,18 +20315,18 @@ step5_check() {
   else bad "node-scan missing (script/conf)"; _need=1; fi
   if crontab -l 2>/dev/null | grep -q 'geomask-node-scan'; then info "nodescan cron 03:30: present"; else bad "nodescan cron missing"; _need=1; fi
   # v1.14.0: youtube edge watchdog
-  # v1.21.2: the VPN lane must be able to degrade. A url-test group over a subscription whose
-  # entry host is dead returns 502 for every list routed to it; a fallback group with DIRECT
-  # last keeps the sites reachable and returns to the nodes as soon as they answer again.
+  # v1.21.5: the VPN lane must contain ONLY subscription nodes. DIRECT as a group member was a
+  # workaround for a misdiagnosis (the real cause was provider health-check hiding every node);
+  # left in place it silently moves VPN-lane traffic onto the plain, DPI-visible path instead of
+  # failing loudly. A hard 502 is the correct behaviour when the subscription is down.
   if grep -qE '^  - name: VPN$' "$_c" 2>/dev/null; then
-    _vt=$(awk '/^  - name: VPN$/{f=1;next} f&&/^  - name:/{exit} f&&/^    type:/{sub(/^[^:]*:[[:space:]]*/,"");print;exit}' "$_c")
-    case "$_vt" in
-      fallback) grep -A14 '^  - name: VPN$' "$_c" | grep -q 'DIRECT' \
-                  && info "VPN lane: fallback with DIRECT last resort" \
-                  || { bad "VPN lane is fallback but has no DIRECT member - it cannot degrade"; _need=1; } ;;
-      url-test) warn "VPN lane is url-test: if the subscription entry host dies, every list routed to it returns 502 (consider fallback + DIRECT)" ;;
-      *)        info "VPN lane type: ${_vt:-unknown}" ;;
-    esac
+    _vb=$(awk '/^  - name: VPN$/{f=1;next} f&&/^  - name:/{exit} f' "$_c")
+    if printf '%s' "$_vb" | grep -qE '^\s*-\s+DIRECT\s*$'; then
+      bad "the VPN group contains DIRECT - VPN-lane traffic leaks to the plain path silently when nodes fail"; _need=1
+    else
+      _vt=$(printf '%s' "$_vb" | awk '/^    type:/{sub(/^[^:]*:[[:space:]]*/,"");print;exit}')
+      info "VPN lane: ${_vt:-unknown}, subscription nodes only"
+    fi
   fi
   if [ -x "$(P /usr/bin/geomask-ytwatch.sh)" ] && [ -s "$(P /etc/geomask-ytwatch.conf)" ]; then info "ytwatch: installed"
   else bad "ytwatch missing (script/conf)"; _need=1; fi
@@ -21915,7 +21915,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.21.4"
+GUARD_VERSION="1.21.5"
 
 log() { logger -t geomask-guard "$*"; }
 

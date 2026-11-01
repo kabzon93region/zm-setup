@@ -933,6 +933,17 @@ grep -qF 'if [ -z "$1" ] && [ -x "$(P /usr/bin/geomask-lane.sh)" ]' "$HERE/../ge
   && { echo "PASS: S32 lane survives --reinstall (removed only on a real uninstall)"; pass=$((pass+1)); } \
   || { echo "FAIL: S32 a reinstall would delete the lane and its interface"; failn=$((failn+1)); }
 
+# v1.21.5: DIRECT must not live inside the VPN group - it turns a subscription outage into a
+# silent plain-path leak instead of a loud failure.
+grep -qF 'the VPN group contains DIRECT' "$HERE/../geomask.sh.in" \
+  && { echo "PASS: S33 --check rejects DIRECT inside the VPN group"; pass=$((pass+1)); } \
+  || { echo "FAIL: S33 --check no longer guards the VPN group against DIRECT"; failn=$((failn+1)); }
+if grep -qF 'fallback with DIRECT last resort' "$HERE/../geomask.sh.in"; then
+  echo "FAIL: S33 the old advice (fallback + DIRECT) is still in the checker"; failn=$((failn+1))
+else
+  echo "PASS: S33 the checker no longer recommends a direct leak"; pass=$((pass+1))
+fi
+
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="
 [ "$failn" -eq 0 ]
