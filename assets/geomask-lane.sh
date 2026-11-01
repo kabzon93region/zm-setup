@@ -15,12 +15,79 @@ LANE_NAME="${LANE_NAME:-VPN-noP2P}"      # <=15 chars: Linux ifname limit
 LANE_IP="${LANE_IP:-198.20.0.1}"
 LANE_PORT="${LANE_PORT:-7892}"
 LANE_GROUP="${LANE_GROUP:-VPN-noP2P}"    # the mihomo group this lane always uses
+# uci section names cannot contain '-'; the tun device keeps LANE_NAME but the network
+# interface and firewall zone must be referenced by a sanitised id (VPN-noP2P -> VPN_noP2P).
+NETID=$(printf '%s' "$LANE_NAME" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9' '_')
 YML=/etc/hev-socks5-tunnel/nop2p.yml
 INITD=/etc/init.d/hev-nop2p
 CFG=/etc/mihomo/config.yaml
 LNAME=nop2p-lane
+NFT=/usr/share/nftables.d/ruleset-post/99-lane-accept.nft
 
 die() { echo "lane: $*" >&2; exit 1; }
+
+# _provision_netfw - give the tun a uci interface + firewall zone + lan forwarding.
+# Without this, fw4 treats the tun as "no zone" and REJECTs (tcp-reset) every MagiTrickle
+# flow routed to it, so every group assigned to this lane silently fails. This is exactly
+# what _ai_tun_ensure does for the AI tunnel; the lane tool was missing it entirely.
+_provision_netfw() {
+  uci -q get "network.$NETID" >/dev/null 2>&1 || {
+    uci set "network.$NETID=interface"
+    uci set "network.$NETID.proto='none'"
+    uci set "network.$NETID.device=$LANE_NAME"
+    uci commit network
+    echo "  network.$NETID -> device $LANE_NAME"
+  }
+  if ! uci -q show firewall 2>/dev/null | grep -q "name='$LANE_NAME'"; then
+    ZN=''
+    for s in $(uci -q show firewall | sed -n 's/^\(firewall\.[^.]*\)=zone$/\1/p'); do
+      [ "$(uci -q get "$s.name")" = "Mihomo" ] && { ZN="$s"; break; }
+    done
+    [ -n "$ZN" ] || { echo "  WARN: no Mihomo zone to clone - lane traffic will be rejected"; return 1; }
+    NEW=$(uci add firewall zone)
+    uci set "firewall.$NEW.name=$LANE_NAME"
+    for opt in input output forward masq mtu_fix; do uci set "firewall.$NEW.$opt=$(uci -q get "$ZN.$opt")"; done
+    uci set "firewall.$NEW.network=$NETID"
+    for f in $(uci -q show firewall | sed -n 's/^\(firewall\.[^.]*\)=forwarding$/\1/p'); do
+      [ "$(uci -q get "$f.src")" = "lan" ] && [ "$(uci -q get "$f.dest")" = "Mihomo" ] || continue
+      NF=$(uci add firewall forwarding); uci set "firewall.$NF.src=lan"; uci set "firewall.$NF.dest=$LANE_NAME"
+    done
+    for f in $(uci -q show firewall | sed -n 's/^\(firewall\.[^.]*\)=forwarding$/\1/p'); do
+      [ "$(uci -q get "$f.src")" = "Mihomo" ] && [ "$(uci -q get "$f.dest")" = "lan" ] || continue
+      NF=$(uci add firewall forwarding); uci set "firewall.$NF.src=$LANE_NAME"; uci set "firewall.$NF.dest=lan"
+    done
+    uci commit firewall
+    echo "  firewall zone '$LANE_NAME' cloned from Mihomo + lan forwarding"
+  fi
+  # A /32 tun subnet means the lan->lane forwarding alone does NOT emit an accept rule
+  # (fw4 leaves accept_to_<zone> empty). Add the explicit accept, same as the AI lane does.
+  mkdir -p /usr/share/nftables.d/ruleset-post
+  cat > "$NFT" <<EOF
+table inet fw4 {
+    chain accept_to_$LANE_NAME {
+        iifname "br-lan" oifname "$LANE_NAME" counter accept comment "geomask-lane: LAN clients to $LANE_NAME tunnel"
+    }
+}
+EOF
+  ifup "$NETID" >/dev/null 2>&1; sleep 1
+  /etc/init.d/firewall reload >/dev/null 2>&1; sleep 2
+  echo "  nft accept drop-in written, firewall reloaded"
+}
+
+_teardown_netfw() {
+  rm -f "$NFT"
+  for s in $(uci -q show firewall 2>/dev/null | sed -n 's/^\(firewall\.[^.]*\)=zone$/\1/p'); do
+    [ "$(uci -q get "$s.name")" = "$LANE_NAME" ] && uci delete "$s"
+  done
+  for f in $(uci -q show firewall 2>/dev/null | sed -n 's/^\(firewall\.[^.]*\)=forwarding$/\1/p'); do
+    src=$(uci -q get "$f.src"); dst=$(uci -q get "$f.dest")
+    { [ "$src" = "$LANE_NAME" ] || [ "$dst" = "$LANE_NAME" ]; } && uci delete "$f"
+  done
+  uci commit firewall 2>/dev/null
+  uci -q get "network.$NETID" >/dev/null 2>&1 && { uci delete "network.$NETID"; uci commit network; }
+  /etc/init.d/firewall reload >/dev/null 2>&1
+  echo "  lane firewall zone/network removed"
+}
 
 status() {
   echo "lane $LANE_NAME (group $LANE_GROUP, socks $LANE_PORT)"
@@ -113,6 +180,8 @@ PY
       -d "{\"path\":\"$CFG\"}"
     sleep 6
   fi
+  echo "=== 4) firewall zone + lan forwarding (without this fw4 rejects the lane) ==="
+  _provision_netfw
   echo "=== done ==="
   status
 }
@@ -135,6 +204,7 @@ PY
     curl -s -o /dev/null -X PUT "http://127.0.0.1:9090/configs?force=true" \
       -H "Authorization: Bearer $SECRET" -H 'Content-Type: application/json' -d "{\"path\":\"$CFG\"}"
   fi
+  _teardown_netfw
   echo "  note: groups that had chosen $LANE_NAME in MagiTrickle must be re-pointed manually"
   status
 }

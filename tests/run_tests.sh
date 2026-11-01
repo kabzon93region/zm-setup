@@ -1052,6 +1052,15 @@ grep -qF 'for port in (7891, 7892, 7894)' "$HERE/../assets/geomask-dnscheck.sh" 
   && { echo "PASS: S40 tunneled pins are tried through all lanes"; pass=$((pass+1)); } \
   || { echo "FAIL: S40 pins are still judged by the torrent listener only"; failn=$((failn+1)); }
 
+# v1.22.7: the lane MUST get a firewall zone, or fw4 rejects (tcp-reset) all its traffic
+grep -qF '_provision_netfw' "$HERE/../assets/geomask-lane.sh" \
+  && grep -qF 'accept_to_' "$HERE/../assets/geomask-lane.sh" \
+  && { echo "PASS: S41 geomask-lane provisions a firewall zone for the tun"; pass=$((pass+1)); } \
+  || { echo "FAIL: S41 the lane tun has no zone and fw4 rejects it (anime/news dead)"; failn=$((failn+1)); }
+grep -qF '_teardown_netfw' "$HERE/../assets/geomask-lane.sh" \
+  && { echo "PASS: S41 lane removal tears the zone/network down too"; pass=$((pass+1)); } \
+  || { echo "FAIL: S41 removal leaves an orphan zone/network behind"; failn=$((failn+1)); }
+
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="
 [ "$failn" -eq 0 ]
