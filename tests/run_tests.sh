@@ -849,10 +849,13 @@ grep -qF 'yield (name, body_start+start, body_start+pos)' "$HERE/../assets/geoma
   && { echo "PASS: S27 group offsets are absolute"; pass=$((pass+1)); } \
   || { echo "FAIL: S27 group offsets are slice-relative again"; failn=$((failn+1)); }
 # one dead provider must not erase the others
-grep -qF 'if not _ok:' "$HERE/../assets/geomask-node-scan.sh" \
+grep -qF 'if not _ok and not _skip:' "$HERE/../assets/geomask-node-scan.sh" \
   && grep -qF 'ok=[' "$HERE/../assets/geomask-node-scan.sh" \
   && { echo "PASS: S27 fan-out isolates per-provider failures and reports them"; pass=$((pass+1)); } \
   || { echo "FAIL: S27 fan-out still aborts on one provider"; failn=$((failn+1)); }
+grep -qF 'skipped by design' "$HERE/../assets/geomask-node-scan.sh" \
+  && { echo "PASS: S27 a provider outside name filtering is skipped, not failed"; pass=$((pass+1)); } \
+  || { echo "FAIL: S27 the AI subscription will be logged as a failure nightly"; failn=$((failn+1)); }
 grep -qF 'Турция' "$HERE/../assets/geomask-nodes.conf" \
   && { echo "PASS: S27 base_filter covers the Cyrillic Turkey"; pass=$((pass+1)); } \
   || { echo "FAIL: S27 base_filter still misses the Cyrillic Turkey"; failn=$((failn+1)); }
