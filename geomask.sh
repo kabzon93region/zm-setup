@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.21.0"
+GM_VERSION="1.21.1"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.21.0"
+BACKEND_VERSION="1.21.1"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.21.0';
+var PANEL_VERSION = '1.21.1';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -21902,7 +21902,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.21.0"
+GUARD_VERSION="1.21.1"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -22520,6 +22520,12 @@ group_name=cfgd.get('group_name','GoogleVideo VPN')
 stall_age=max(5,int(cfgd.get('stall_min_age','25')))
 stall_bytes=max(1024,int(cfgd.get('stall_max_bytes','10000')))
 stall_threshold=max(1,int(cfgd.get('stall_threshold','1')))
+# how many quiet connections the same host must show in one sample to count as a stalled edge
+stall_min_conns=max(1,int(cfgd.get('stall_min_conns','3')))
+# how many distinct quiet edges in ONE sample means "the class is being killed" -> blanket rule
+blanket_when=max(2,int(cfgd.get('blanket_when','4')))
+# clean samples required before the blanket rule is taken back down
+blanket_off=max(1,int(cfgd.get('blanket_off_after','20')))
 
 # ---------- MagiTrickle API over unix socket (handles chunked responses) ----------
 class U(http.client.HTTPConnection):
@@ -22674,6 +22680,12 @@ def do_status():
         out['blanket_present']=bool(blanket)
         out['pinned_hosts']=sorted(edges.keys())
         out['pinned_count']=len(edges)
+    # pinned_count is every rule in the group; the auto-pins the watchdog itself owns are a
+    # different number and they diverged (status said 38 while --reset released 71). Show both,
+    # or the operator reads one figure and trusts the wrong one.
+    out['auto_pin_count']=len(st.get('pins') or [])
+    out['stall_seen']=st.get('stall_seen') or {}
+    out['stall_min_conns']=stall_min_conns
     return out
 
 def set_mode(new_mode):
@@ -22744,15 +22756,48 @@ def do_scan():
     counts=recent_failures()
     st['failures']=counts
     stalled_all=stalled_edges()
-    # Connections opened BEFORE a pin keep showing as stalled until they time out, but they are
-    # already fixed - counting/reporting them makes the panel claim a pinned edge is still broken.
-    stalled={h:n for h,n in stalled_all.items() if h not in edges}
+    # A quiet connection is NOT by itself a blocked edge: the YouTube player keeps prefetch and
+    # keep-alive connections that legitimately transfer almost nothing, and abandons connections
+    # when it switches edge. Requiring a SWARM of quiet connections for the same host is what
+    # separates a DPI-killed edge (dozens of fresh connections, ~0 bytes back) from normal idle
+    # noise. Without this, the 5s threshold pinned healthy edges every minute and each wrong pin
+    # slowed the TV down, which made the player open more quiet connections - a feedback loop.
+    stalled={h:n for h,n in stalled_all.items() if h not in edges and int(n) >= stall_min_conns}
     st['stalled']=stalled
+    # --- aggregate trigger (owner, 01.11): the TV/phone player waits only 10-15s for a stream,
+    # then restarts the connection ON A DIFFERENT EDGE. Per-host pins therefore cannot win that
+    # race: by the time an edge is proven bad, the player has left it, and we just grow a list of
+    # names we will never use again. What the player cannot rotate away from is the class - so
+    # when MANY edges look quiet at once, that is not "one bad edge", it is "edges are being
+    # killed", and the whole googlevideo namespace goes to VPN as a single rule.
+    if len(stalled) >= blanket_when:
+        if not blanket:
+            log('blanket: %d distinct quiet edges in one sample (>= %d) - routing the whole class'
+                % (len(stalled), blanket_when))
+            set_mode('blanket')
+            st['stall_seen']={}; st['clean_samples']=0
+            save_state(st); return
+        st['clean_samples']=0
+    else:
+        if blanket:
+            n=int(st.get('clean_samples',0))+1
+            st['clean_samples']=n
+            if n >= blanket_off:
+                log('blanket: %d clean samples - back to per-edge auto' % n)
+                set_mode('auto'); st['clean_samples']=0
+                save_state(st); return
+        else:
+            st['clean_samples']=0
     # a stalled connection is a per-sample observation: count consecutive sightings so one
     # transient sample cannot pin an edge on its own
     seen={h:int(n) for h,n in (st.get('stall_seen') or {}).items() if h not in edges}
     fresh={}
-    for h,n in stalled.items(): fresh[h]=int(seen.get(h,0))+int(n)
+    # count SAMPLES, not connections. Adding the connection count made stall_threshold mean
+    # "N quiet connections in total", which a single swarm satisfies at once - so the threshold
+    # never actually waited for sustained evidence. The per-sample swarm gate is stall_min_conns;
+    # this counter is how many consecutive minutes the host kept qualifying.
+    for h in stalled:
+        fresh[h]=int(seen.get(h,0))+1
     st['stall_seen']=fresh
     why={}
     cand={}
@@ -22817,12 +22862,24 @@ window_min=30
 # "alive a long time, almost nothing downloaded". That is what these thresholds define:
 # a *.googlevideo.com connection routed DIRECT, older than stall_min_age seconds, with less
 # than stall_max_bytes downloaded (a bare TLS handshake is only a few KB).
-stall_min_age=5
+# A connection must be quiet for this long (SECONDS) before it counts at all.
+stall_min_age=30
 stall_max_bytes=10000
-# consecutive samples a stalled host must appear in before pinning. The player itself fails
-# over within seconds, so the age threshold is 5s and the scan runs every minute (v1.20.4):
-# reaction is <= ~60s instead of the old ~5min.
-stall_threshold=1
+# how many quiet connections the SAME host must show in one sample. This is the real
+# discriminator: a DPI-killed edge produces a swarm (dozens), a healthy player produces a
+# couple of idle prefetch/keep-alive connections. 5s + 1 connection pinned healthy edges and
+# made the TV stall every minute (owner, 01.11).
+stall_min_conns=3
+# consecutive samples a stalled host must appear in before pinning (cron runs every 1 min,
+# so this is ~4 minutes of sustained evidence)
+stall_threshold=4
+# The player gives up on an edge after 10-15s and reconnects on ANOTHER one, so a per-edge pin
+# is almost always applied to an edge the player already left. Therefore: when this many distinct
+# edges look quiet in the same sample, the whole googlevideo class goes to VPN as ONE rule
+# (blanket), because that is the only thing the player cannot rotate away from. It comes back
+# down automatically after blanket_off_after clean samples (~20 minutes).
+blanket_when=4
+blanket_off_after=20
 
 # Hard cap on automatically pinned hosts; when reached the watcher stops pinning and logs
 max_pins=40

@@ -871,9 +871,25 @@ grep -qF 'geomask-lane.sh 755' "$HERE/../geomask.sh.in" \
   && grep -qF 'geomask-lane.sh)" remove' "$HERE/../geomask.sh.in" \
   && { echo "PASS: S30 lane is installed and removed with geomask"; pass=$((pass+1)); } \
   || { echo "FAIL: S30 lane lifecycle is incomplete"; failn=$((failn+1)); }
-grep -qF 'stall_min_age=5' "$HERE/../assets/geomask-ytwatch.conf" \
-  && { echo "PASS: S28 youtube failover threshold is 5 seconds"; pass=$((pass+1)); } \
-  || { echo "FAIL: S28 youtube threshold still slow"; failn=$((failn+1)); }
+grep -qF 'stall_min_conns=3' "$HERE/../assets/geomask-ytwatch.conf" \
+  && { echo "PASS: S28 a stalled edge needs a swarm, not one idle connection"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 idle prefetch connections can pin healthy edges"; failn=$((failn+1)); }
+grep -qF 'stall_threshold=4' "$HERE/../assets/geomask-ytwatch.conf" \
+  && { echo "PASS: S28 pinning needs four consecutive samples"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 one sample can pin an edge"; failn=$((failn+1)); }
+grep -qF 'for h in stalled:' "$HERE/../assets/geomask-ytwatch.sh" \
+  && { echo "PASS: S28 stall counter accumulates samples, not connections"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 a single swarm still crosses the threshold"; failn=$((failn+1)); }
+grep -qF 'if len(stalled) >= blanket_when' "$HERE/../assets/geomask-ytwatch.sh" \
+  && { echo "PASS: S28 many quiet edges escalate to one blanket rule"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 cannot win the 10s edge-rotation race"; failn=$((failn+1)); }
+grep -qF 'blanket_when=4' "$HERE/../assets/geomask-ytwatch.conf" \
+  && grep -qF 'blanket_off_after=20' "$HERE/../assets/geomask-ytwatch.conf" \
+  && { echo "PASS: S28 blanket trigger and hysteresis are configured"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 blanket would never come back down"; failn=$((failn+1)); }
+grep -qF "out['auto_pin_count']" "$HERE/../assets/geomask-ytwatch.sh" \
+  && { echo "PASS: S28 status separates auto-pins from all group rules"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 status can mislead about how many pins exist"; failn=$((failn+1)); }
 grep -qF '*/1 * * * * /usr/bin/geomask-ytwatch.sh' "$HERE/../geomask.sh.in" \
   && grep -qF 'ytwatch cron migrated */5 -> */1' "$HERE/../geomask.sh.in" \
   && { echo "PASS: S28 ytwatch cron is */1 and migrates old entries"; pass=$((pass+1)); } \
