@@ -944,6 +944,19 @@ else
   echo "PASS: S33 the checker no longer recommends a direct leak"; pass=$((pass+1))
 fi
 
+# v1.21.6: the sync must follow the interface, not one hard-coded name - otherwise pointing a
+# group at the AI tunnel silently removes its domains from the AI ruleset.
+grep -qF "TUNNELED_IFACES = {'Mihomo', 'AI', 'VPN-noP2P'}" "$HERE/../assets/sync_mtrickle_mihomo.sh" \
+  && grep -qF "g.get('interface') not in TUNNELED_IFACES" "$HERE/../assets/sync_mtrickle_mihomo.sh" \
+  && { echo "PASS: S34 sync classifies groups by interface"; pass=$((pass+1)); } \
+  || { echo "FAIL: S34 sync still only reads interface Mihomo"; failn=$((failn+1)); }
+grep -qF "is_ai = g.get('interface') == 'AI'" "$HERE/../assets/sync_mtrickle_mihomo.sh" \
+  && { echo "PASS: S34 a group on the AI tunnel always lands in ai.yaml"; pass=$((pass+1)); } \
+  || { echo "FAIL: S34 AI membership still depends on the group name"; failn=$((failn+1)); }
+grep -qF 'def audit_restricted' "$HERE/../assets/sync_mtrickle_mihomo.sh" \
+  && { echo "PASS: S34 IP ranges on the restricted tunnel are reported"; pass=$((pass+1)); } \
+  || { echo "FAIL: S34 the restricted tunnel cannot be audited"; failn=$((failn+1)); }
+
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="
 [ "$failn" -eq 0 ]

@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.21.5"
+GM_VERSION="1.21.6"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.21.5"
+BACKEND_VERSION="1.21.6"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.21.5';
+var PANEL_VERSION = '1.21.6';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -20405,6 +20405,9 @@ GOOGLEVIDEO_GROUP = 'GoogleVideo VPN'
 
 # Whole groups routed to the German AI subscription.
 AI_GROUPS = {'Google+AI to DE'}
+# interfaces that carry traffic INTO mihomo (tunnelled); anything else (pppoe-wan, blackhole,
+# wireguard) leaves by another path and must not appear in these rulesets
+TUNNELED_IFACES = {'Mihomo', 'AI', 'VPN-noP2P'}
 # AI system/check domains that live inside non-AI groups (e.g. Geoblock).
 AI_DOMAIN_RE = re.compile(
     r'^(?:[\w-]+\.)*(openai\.com|chatgpt\.com|claude\.ai|claude\.com|anthropic\.com'
@@ -20504,15 +20507,40 @@ def is_ai_domain(e):
     m = re.match(r'^DOMAIN(?:-SUFFIX)?,(.+)$', e)
     return bool(m and AI_DOMAIN_RE.match(m.group(1)))
 
+# The restricted subscription forbids P2P. Groups pointed at its tunnel are routed by the
+# interface itself, so mihomo rules never see them - which also means --check cannot see them.
+# Report IP-shaped entries there explicitly: a bare address is exactly how a torrent peer
+# arrives, so an IP range on that interface is the one thing that can break the owner's rule.
+def audit_restricted():
+    ipre = re.compile(r'^\d+\.\d+\.\d+\.\d+(/\d+)?$')
+    for g in GRPS:
+        if g.get('interface') != 'VPN-noP2P' or str(g.get('enable')).lower() != 'true':
+            continue
+        ips = [str(r.get('rule')) for r in g['rules']
+               if str(r.get('enable')).lower() == 'true' and ipre.match(str(r.get('rule')).strip())]
+        if ips:
+            print('WARN: group %r is on the restricted tunnel and holds %d IP range(s) - '
+                  'traffic to those addresses goes to the P2P-forbidding subscription'
+                  % (g.get('name'), len(ips)))
+audit_restricted()
+
 mt_payload, ai_payload = [], []
 ytvpn_payload = []
 yt_group_found = False
 seen_mt, seen_ai, seen_yt = set(), set(), set()
 moved = 0
 for g in GRPS:
-    if g.get('interface') != 'Mihomo' or str(g.get('enable')).lower() != 'true':
+    # v1.21.6: work off the INTERFACE, not off one hard-coded name. Only groups that actually
+    # tunnel belong in these rulesets; pppoe-wan and blackhole do not.
+    # This used to be `!= 'Mihomo'`, so the moment the owner pointed "Google+AI to DE" at the AI
+    # tunnel the sync stopped seeing it and ai.yaml collapsed from 170 rules to 3 - the rule
+    # chain then sent Google/AI to DIRECT for any traffic that did not arrive through the
+    # MagiTrickle group match. A group on the restricted tunnel keeps its domains in the normal
+    # set: traffic there is already routed by the interface, and this way the chain still sends
+    # it to the P2P-tolerant lane rather than losing the domain entirely.
+    if g.get('interface') not in TUNNELED_IFACES or str(g.get('enable')).lower() != 'true':
         continue
-    is_ai = g.get('name') in AI_GROUPS
+    is_ai = g.get('interface') == 'AI' or g.get('name') in AI_GROUPS
     is_ytvpn = g.get('name') == GOOGLEVIDEO_GROUP
     if is_ytvpn:
         yt_group_found = True
@@ -21915,7 +21943,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.21.5"
+GUARD_VERSION="1.21.6"
 
 log() { logger -t geomask-guard "$*"; }
 
