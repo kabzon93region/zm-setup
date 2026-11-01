@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.22.2"
+GM_VERSION="1.22.3"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -1091,7 +1091,7 @@ ASSET_EOF
   # assigned MagiTrickle lists to, and losing it silently reroutes those lists.
   if [ -e "$(P /sys/class/net/VPN-noP2P)" ] && [ -x "$(P /usr/bin/geomask-lane.sh)" ]; then
     info "lane VPN-noP2P: already present, left untouched"
-  elif [ -x "$(P /usr/bin/geomask-lane.sh)" ] && [ -n "$GM_AUTO_LANE" ]; then
+  elif [ -x "$(P /usr/bin/geomask-lane.sh)" ] && [ -n "${GM_AUTO_LANE:-}" ]; then
     "$(P /usr/bin/geomask-lane.sh)" install >/dev/null 2>&1 || warn "lane install failed"
   fi
   # v1.22.1: DNS safety audit - read-only, explains "site address not found" before it happens

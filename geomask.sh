@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.22.2"
+GM_VERSION="1.22.3"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.22.2"
+BACKEND_VERSION="1.22.3"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.22.2';
+var PANEL_VERSION = '1.22.3';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -21426,7 +21426,7 @@ ASSET_EOF
   # assigned MagiTrickle lists to, and losing it silently reroutes those lists.
   if [ -e "$(P /sys/class/net/VPN-noP2P)" ] && [ -x "$(P /usr/bin/geomask-lane.sh)" ]; then
     info "lane VPN-noP2P: already present, left untouched"
-  elif [ -x "$(P /usr/bin/geomask-lane.sh)" ] && [ -n "$GM_AUTO_LANE" ]; then
+  elif [ -x "$(P /usr/bin/geomask-lane.sh)" ] && [ -n "${GM_AUTO_LANE:-}" ]; then
     "$(P /usr/bin/geomask-lane.sh)" install >/dev/null 2>&1 || warn "lane install failed"
   fi
   # v1.22.1: DNS safety audit - read-only, explains "site address not found" before it happens
@@ -22171,7 +22171,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.22.2"
+GUARD_VERSION="1.22.3"
 
 log() { logger -t geomask-guard "$*"; }
 

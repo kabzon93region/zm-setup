@@ -97,6 +97,7 @@ printf 'group=VPN-noP2P\nlogfile=/root/geomask-vpn-audit.log\n' > "$R/etc/geomas
 mkdir -p "$R/etc/geomask/torrent"
 printf 'payload: []\n' > "$R/etc/mihomo/ruleset/ytvpn.yaml"
 printf 'payload:\n  - DOMAIN-SUFFIX,tracker.example.org\n' > "$R/etc/mihomo/ruleset/torrentdirect.yaml"
+printf 'payload:\n  - DOMAIN-SUFFIX,rutracker.org\n' > "$R/etc/mihomo/ruleset/torrentsites.yaml"
 # v1.17.0: the IP half of the mtrickle ruleset - must contain NO domain rules and vice versa
 printf 'payload:\n  - IP-CIDR,203.0.113.0/24,no-resolve\n' > "$R/etc/mihomo/ruleset/mtrickle_bulk.yaml"
 printf 'payload: []\n' > "$R/etc/mihomo/ruleset/mtrickle.yaml"
@@ -126,6 +127,8 @@ rule-providers:
     type: file
   torrentdirect:
     type: file
+  torrentsites:
+    type: file
 rules:
   - AND,((NETWORK,UDP),(DST-PORT,443),(DOMAIN-SUFFIX,googlevideo.com)),REJECT
   - AND,((NETWORK,UDP),(DST-PORT,443),(DOMAIN-SUFFIX,youtube.com)),REJECT
@@ -133,6 +136,7 @@ rules:
   - RULE-SET,ytvpn,VPN
   - RULE-SET,ytdirect,DIRECT
   - RULE-SET,ai,AI
+  - RULE-SET,torrentsites,DIRECT
   - RULE-SET,torrentdirect,VPN
   - SRC-PORT,41552,VPN
   - RULE-SET,mtrickle_bulk,VPN
@@ -1007,6 +1011,20 @@ grep -qF "is_ai = g.get('interface') == 'AI'" "$HERE/../assets/sync_mtrickle_mih
 grep -qF 'def audit_restricted' "$HERE/../assets/sync_mtrickle_mihomo.sh" \
   && { echo "PASS: S34 IP ranges on the restricted tunnel are reported"; pass=$((pass+1)); } \
   || { echo "FAIL: S34 the restricted tunnel cannot be audited"; failn=$((failn+1)); }
+
+# v1.22.3: the installer runs under `set -u` on Debian's dash, where a new variable used
+# without a default kills the run with rc=2 - invisible under Git bash, which has no nounset.
+if grep -E '\$\{GM_[A-Z_]+\}[^:=]' "$HERE/../geomask.sh.in" | grep -qv '^\s*#'; then
+  echo "FAIL: S38 a GM_* variable is referenced bare (breaks under set -u)"
+  grep -nE '\$\{GM_[A-Z_]+\}' "$HERE/../geomask.sh.in" | grep -v ':-' | head -5 | sed 's/^/    /'
+  failn=$((failn+1))
+else
+  echo "PASS: S38 no bare GM_* references outside assignments"; pass=$((pass+1))
+fi
+# and the lane flag must carry its default
+grep -qF '${GM_AUTO_LANE:-}' "$HERE/../geomask.sh.in" \
+  && { echo "PASS: S38 GM_AUTO_LANE has a nounset-safe default"; pass=$((pass+1)); } \
+  || { echo "FAIL: S38 GM_AUTO_LANE is bare again"; failn=$((failn+1)); }
 
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="
