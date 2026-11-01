@@ -92,6 +92,7 @@ mkdir -p "$R/etc/geomask"
 printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-vpnwatch.sh"; chmod +x "$R/usr/bin/geomask-vpnwatch.sh"
 printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-morning-check.sh"; chmod +x "$R/usr/bin/geomask-morning-check.sh"
 printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-lane.sh"; chmod +x "$R/usr/bin/geomask-lane.sh"
+printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-dnscheck.sh"; chmod +x "$R/usr/bin/geomask-dnscheck.sh"
 printf 'group=VPN-noP2P\nlogfile=/root/geomask-vpn-audit.log\n' > "$R/etc/geomask/vpnwatch.conf"
 mkdir -p "$R/etc/geomask/torrent"
 printf 'payload: []\n' > "$R/etc/mihomo/ruleset/ytvpn.yaml"
@@ -877,6 +878,21 @@ grep -qF 'def build_sites' "$HERE/../assets/geomask-torrent.sh" \
 grep -qF 'RULE-SET,torrentsites,DIRECT' "$HERE/../geomask.sh.in" \
   && { echo "PASS: S36 sites rule precedes the tracker rule in the template"; pass=$((pass+1)); } \
   || { echo "FAIL: S36 sites would still be pushed into the VPN lane"; failn=$((failn+1)); }
+# v1.22.1: DNS safety audit must ship and must never modify anything
+grep -qF 'geomask-dnscheck.sh 755' "$HERE/../geomask.sh.in" \
+  && { echo "PASS: S37 DNS audit ships with geomask"; pass=$((pass+1)); } \
+  || { echo "FAIL: S37 DNS audit is not installed"; failn=$((failn+1)); }
+if grep -qE 'uci (set|commit|delete)|sed -i|>/etc/hosts|/etc/init.d/.*restart' "$HERE/../assets/geomask-dnscheck.sh"; then
+  echo "FAIL: S37 the DNS audit is not read-only"; failn=$((failn+1))
+else
+  echo "PASS: S37 the DNS audit only reads"; pass=$((pass+1))
+fi
+grep -qF 'stale bypass pins' "$HERE/../assets/geomask-dnscheck.sh" \
+  && { echo "PASS: S37 dead /etc/hosts pins are detected"; pass=$((pass+1)); } \
+  || { echo "FAIL: S37 stale pins would go unnoticed"; failn=$((failn+1)); }
+grep -qF 'geomask-dnscheck.sh --quick' "$HERE/../assets/geomask-morning-check.sh" \
+  && { echo "PASS: S37 the morning check includes the DNS audit"; pass=$((pass+1)); } \
+  || { echo "FAIL: S37 the morning check skips DNS"; failn=$((failn+1)); }
 grep -qF 'geomask-lane.sh 755' "$HERE/../geomask.sh.in" \
   && grep -qF 'geomask-lane.sh)" remove' "$HERE/../geomask.sh.in" \
   && { echo "PASS: S30 lane is installed and removed with geomask"; pass=$((pass+1)); } \

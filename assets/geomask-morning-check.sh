@@ -82,6 +82,15 @@ echo "--- 5. geomask's own verdict ---"
 sh /tmp/geomask.sh --check 2>&1 | tail -2 | sed 's/^/  /'
 
 echo
+echo "--- 6. DNS safety (stale bypass pins, redirect loops) ---"
+if [ -x /usr/bin/geomask-dnscheck.sh ]; then
+  /usr/bin/geomask-dnscheck.sh --quick 2>&1 | grep -E 'FAIL|WARN|RESULT' | sed 's/^/  /'
+  [ "${PIPESTATUS[0]:-0}" = "0" ] || true
+else
+  echo "  (geomask-dnscheck.sh not installed)"
+fi
+
+echo
 if [ $FAIL -eq 0 ]; then
   echo "=== RESULT: safe to enable the torrent client ==="
 else

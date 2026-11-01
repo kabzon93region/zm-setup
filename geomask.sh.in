@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.22.0"
+GM_VERSION="1.22.1"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -1094,6 +1094,10 @@ ASSET_EOF
   elif [ -x "$(P /usr/bin/geomask-lane.sh)" ] && [ -n "$GM_AUTO_LANE" ]; then
     "$(P /usr/bin/geomask-lane.sh)" install >/dev/null 2>&1 || warn "lane install failed"
   fi
+  # v1.22.1: DNS safety audit - read-only, explains "site address not found" before it happens
+  save_stream /usr/bin/geomask-dnscheck.sh 755 <<'ASSET_EOF'
+@@ASSET:geomask-dnscheck.sh@@
+ASSET_EOF
   # v1.21.0: extra tunnel lane - gives MagiTrickle's interface dropdown a real netdev that
   # always exits through the restricted subscription, so a list can be pointed at it directly.
   save_stream /usr/bin/geomask-lane.sh 755 <<'ASSET_EOF'
@@ -1571,6 +1575,7 @@ geomask_uninstall() {
     "$(P /usr/bin/geomask-lane.sh)" remove >/dev/null 2>&1 || warn "lane removal reported a problem"
   fi
   rm -f "$(P /usr/bin/geomask-lane.sh)"
+  rm -f "$(P /usr/bin/geomask-dnscheck.sh)"
   info "removed: vpnwatch (conf /etc/geomask/vpnwatch.conf and the audit log kept)"
   if crontab -l 2>/dev/null | grep -q 'sync_mtrickle_mihomo'; then
     crontab -l 2>/dev/null | grep -v 'sync_mtrickle_mihomo' | crontab - 2>/dev/null && info "cron entry removed"

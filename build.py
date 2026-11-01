@@ -34,6 +34,7 @@ MAP = {
     "zapret-force-keep.txt":  "zapret-force-keep.txt",
     "geomask-morning-check.sh": "geomask-morning-check.sh",
     "geomask-lane.sh":       "geomask-lane.sh",
+    "geomask-dnscheck.sh":   "geomask-dnscheck.sh",
 }
 
 # menu.json asset file on disk (same acl download name collision): we saved menu as second luci-app-geo-sync.json
