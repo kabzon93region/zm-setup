@@ -91,6 +91,7 @@ printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-torrent.sh"; chmod +x "$R/usr
 mkdir -p "$R/etc/geomask"
 printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-vpnwatch.sh"; chmod +x "$R/usr/bin/geomask-vpnwatch.sh"
 printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-morning-check.sh"; chmod +x "$R/usr/bin/geomask-morning-check.sh"
+printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-lane.sh"; chmod +x "$R/usr/bin/geomask-lane.sh"
 printf 'group=VPN-noP2P\nlogfile=/root/geomask-vpn-audit.log\n' > "$R/etc/geomask/vpnwatch.conf"
 mkdir -p "$R/etc/geomask/torrent"
 printf 'payload: []\n' > "$R/etc/mihomo/ruleset/ytvpn.yaml"
@@ -858,6 +859,18 @@ grep -qF 'Турция' "$HERE/../assets/geomask-nodes.conf" \
 grep -qF 'geomask-morning-check.sh 755' "$HERE/../geomask.sh.in" \
   && { echo "PASS: S28 morning check ships with geomask"; pass=$((pass+1)); } \
   || { echo "FAIL: S28 morning check is not installed"; failn=$((failn+1)); }
+# v1.21.0: the extra lane must refuse to touch a config without the group, must validate the
+# listener before writing it, and must restore the config if validation fails.
+grep -qF 'group $LANE_GROUP not found - refusing' "$HERE/../assets/geomask-lane.sh" \
+  && { echo "PASS: S30 lane refuses when the mihomo group is absent"; pass=$((pass+1)); } \
+  || { echo "FAIL: S30 lane could create a tunnel to nothing"; failn=$((failn+1)); }
+grep -qF 'mihomo -t failed after adding the listener - config restored' "$HERE/../assets/geomask-lane.sh" \
+  && { echo "PASS: S30 listener write is validated and rolled back"; pass=$((pass+1)); } \
+  || { echo "FAIL: S30 listener write is unvalidated"; failn=$((failn+1)); }
+grep -qF 'geomask-lane.sh 755' "$HERE/../geomask.sh.in" \
+  && grep -qF 'geomask-lane.sh)" remove' "$HERE/../geomask.sh.in" \
+  && { echo "PASS: S30 lane is installed and removed with geomask"; pass=$((pass+1)); } \
+  || { echo "FAIL: S30 lane lifecycle is incomplete"; failn=$((failn+1)); }
 grep -qF 'stall_min_age=5' "$HERE/../assets/geomask-ytwatch.conf" \
   && { echo "PASS: S28 youtube failover threshold is 5 seconds"; pass=$((pass+1)); } \
   || { echo "FAIL: S28 youtube threshold still slow"; failn=$((failn+1)); }

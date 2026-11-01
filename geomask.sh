@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.20.6"
+GM_VERSION="1.21.0"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.20.6"
+BACKEND_VERSION="1.21.0"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.20.6';
+var PANEL_VERSION = '1.21.0';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -20336,6 +20336,12 @@ step5_check() {
   else warn "vpnwatch cron missing - the lane audit will not run"; fi
   if [ -x "$(P /usr/bin/geomask-morning-check.sh)" ]; then info "morning check: installed"
   else bad "morning check script missing"; _need=1; fi
+  # the extra lane is optional; report it, never fail because of it
+  if [ -e "$(P /sys/class/net/VPN-noP2P)" ]; then
+    info "lane VPN-noP2P: netdev present (MagiTrickle can select it)"
+  else
+    info "lane VPN-noP2P: not installed (run: geomask-lane.sh install)"
+  fi
   svc_alive magitrickled && info "magitrickle: running" || { bad "magitrickle not running"; _need=1; }
   return $_need
 }
@@ -21336,6 +21342,158 @@ print(json.dumps({'ok': True, 'domains': d, 'raw_ips': i2, 'changed': changed}))
 PYEOF
 
 ASSET_EOF
+  # v1.21.0: extra tunnel lane - gives MagiTrickle's interface dropdown a real netdev that
+  # always exits through the restricted subscription, so a list can be pointed at it directly.
+  save_stream /usr/bin/geomask-lane.sh 755 <<'ASSET_EOF'
+#!/bin/sh
+# geomask-lane.sh - manage an extra tunnel lane so MagiTrickle's interface dropdown gains a
+# real netdev for one mihomo group.
+#
+#   geomask-lane.sh install    create the lane (idempotent)
+#   geomask-lane.sh status     what exists right now
+#   geomask-lane.sh remove     stop, disable and delete everything geomask added
+#
+# Why a netdev at all: the MagiTrickle dropdown lists /sys/class/net entries, not mihomo
+# groups. The existing "AI" option is not special - it is a second hev-socks5-tunnel instance
+# (ai.yml -> tun "AI" 198.19.0.1 -> socks 7891 -> mihomo listener with "proxy: AI"). A new
+# option therefore needs a new tunnel device, built the same way. MagiTrickle itself creates
+# the per-group fwmark table with "default dev <iface>" once a group picks it.
+LANE_NAME="${LANE_NAME:-VPN-noP2P}"      # <=15 chars: Linux ifname limit
+LANE_IP="${LANE_IP:-198.20.0.1}"
+LANE_PORT="${LANE_PORT:-7892}"
+LANE_GROUP="${LANE_GROUP:-VPN-noP2P}"    # the mihomo group this lane always uses
+YML=/etc/hev-socks5-tunnel/nop2p.yml
+INITD=/etc/init.d/hev-nop2p
+CFG=/etc/mihomo/config.yaml
+LNAME=nop2p-lane
+
+die() { echo "lane: $*" >&2; exit 1; }
+
+status() {
+  echo "lane $LANE_NAME (group $LANE_GROUP, socks $LANE_PORT)"
+  [ -e "/sys/class/net/$LANE_NAME" ] && echo "  netdev:   present" || echo "  netdev:   absent"
+  [ -f "$YML" ] && echo "  config:   $YML" || echo "  config:   missing"
+  [ -x "$INITD" ] && { echo -n "  service:  "; "$INITD" enabled >/dev/null 2>&1 && echo -n "enabled " || echo -n "disabled "; "$INITD" running >/dev/null 2>&1 && echo "running" || echo "not running"; } || echo "  service:  missing"
+  grep -q "name: $LNAME" "$CFG" 2>/dev/null && echo "  listener: present" || echo "  listener: absent"
+}
+
+install() {
+  command -v hev-socks5-tunnel >/dev/null 2>&1 || die "hev-socks5-tunnel is not installed"
+  [ -d /etc/hev-socks5-tunnel ] || die "/etc/hev-socks5-tunnel does not exist"
+  grep -qE "^  - name: $LANE_GROUP\b" "$CFG" || die "mihomo group $LANE_GROUP not found - refusing"
+
+  echo "=== 1) tunnel config ==="
+  if [ -s "$YML" ]; then
+    echo "  keeping existing $YML"
+  else
+    cat > "$YML" <<YMLend
+tunnel:
+  name: $LANE_NAME
+  mtu: 8500
+  multi-queue: false
+  ipv4: $LANE_IP
+socks5:
+  port: $LANE_PORT
+  address: 127.0.0.1
+  udp: 'udp'
+YMLend
+    echo "  wrote $YML"
+  fi
+
+  echo "=== 2) service ==="
+  if [ ! -x "$INITD" ]; then
+    cat > "$INITD" <<'INITend'
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=99
+start_service() {
+  procd_open_instance
+  procd_set_param command /usr/bin/hev-socks5-tunnel /etc/hev-socks5-tunnel/nop2p.yml
+  procd_set_param file /etc/hev-socks5-tunnel/nop2p.yml
+  procd_set_param limits core="unlimited"
+  procd_set_param limits nofile="1000000 1000000"
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_set_param respawn
+  procd_close_instance
+}
+INITend
+    chmod 755 "$INITD"
+    echo "  wrote $INITD"
+  else
+    echo "  keeping existing $INITD"
+  fi
+  "$INITD" enable >/dev/null 2>&1
+  "$INITD" running >/dev/null 2>&1 || "$INITD" start
+  sleep 2
+  [ -e "/sys/class/net/$LANE_NAME" ] || die "tun $LANE_NAME did not appear"
+  echo "  netdev $LANE_NAME is up"
+
+  echo "=== 3) listener (validated before it is written) ==="
+  if grep -q "name: $LNAME" "$CFG"; then
+    echo "  listener already present"
+  else
+    cp -p "$CFG" "$CFG.bak_lane"
+    python3 - "$CFG" "$LNAME" "$LANE_PORT" "$LANE_GROUP" <<'PY'
+import re, sys
+p, name, port, grp = sys.argv[1:5]
+t = open(p, encoding='utf-8').read()
+blk = ('  - name: %s\n    type: mixed\n    port: %s\n    listen: 127.0.0.1\n'
+       '    proxy: %s\n' % (name, port, grp))
+m = re.search(r'(?m)^listeners:\s*$(.*?)(?=^(?=[a-z]))', t, re.M | re.S)
+if m:
+    body = m.group(1)
+    # append at the end of the listeners block, keeping the trailing blank line outside it
+    tail = len(body) - len(body.rstrip())
+    new = t[:m.start(1)] + body.rstrip('\n') + '\n' + blk + '\n' * (1 if tail else 0) + t[m.end(1):]
+else:
+    new = t + '\nlisteners:\n' + blk
+open(p, 'w', encoding='utf-8', newline='').write(new)
+print('  listener %s:%s -> proxy %s added' % (name, port, grp))
+PY
+    if ! /usr/bin/mihomo -t -d /etc/mihomo >/dev/null 2>&1; then
+      cp -p "$CFG.bak_lane" "$CFG"; die "mihomo -t failed after adding the listener - config restored"
+    fi
+    SECRET=$(grep -m1 -oE '^secret:[[:space:]]*["'\'']?[^"'\''[:space:]]+' "$CFG" | sed -E 's/^secret:[[:space:]]*["'\'']?//')
+    curl -s -o /dev/null -X PUT "http://127.0.0.1:9090/configs?force=true" \
+      -H "Authorization: Bearer $SECRET" -H 'Content-Type: application/json' \
+      -d "{\"path\":\"$CFG\"}"
+    sleep 6
+  fi
+  echo "=== done ==="
+  status
+}
+
+remove() {
+  "$INITD" stop >/dev/null 2>&1; "$INITD" disable >/dev/null 2>&1
+  rm -f "$INITD" "$YML"
+  if grep -q "name: $LNAME" "$CFG" 2>/dev/null; then
+    cp -p "$CFG" "$CFG.bak_lane"
+    python3 - "$CFG" "$LNAME" <<'PY'
+import re, sys
+p, name = sys.argv[1:3]
+t = open(p, encoding='utf-8').read()
+new = re.sub(r'(?m)^  - name: %s\n(?:[ ]{4}.*\n)+' % re.escape(name), '', t)
+open(p, 'w', encoding='utf-8', newline='').write(new)
+print('  listener removed' if new != t else '  nothing to remove')
+PY
+    /usr/bin/mihomo -t -d /etc/mihomo >/dev/null 2>&1 || { cp -p "$CFG.bak_lane" "$CFG"; die "config invalid after removing the listener - restored"; }
+    SECRET=$(grep -m1 -oE '^secret:[[:space:]]*["'\'']?[^"'\''[:space:]]+' "$CFG" | sed -E 's/^secret:[[:space:]]*["'\'']?//')
+    curl -s -o /dev/null -X PUT "http://127.0.0.1:9090/configs?force=true" \
+      -H "Authorization: Bearer $SECRET" -H 'Content-Type: application/json' -d "{\"path\":\"$CFG\"}"
+  fi
+  echo "  note: groups that had chosen $LANE_NAME in MagiTrickle must be re-pointed manually"
+  status
+}
+
+case "${1:-status}" in
+  install) install ;;
+  remove)  remove ;;
+  status)  status ;;
+  *) die "usage: geomask-lane.sh {install|status|remove}" ;;
+esac
+
+ASSET_EOF
   # v1.20.6: morning check - read-only audit the owner runs after the restricted
   # subscription comes back, before enabling the torrent client again.
   save_stream /usr/bin/geomask-morning-check.sh 755 <<'ASSET_EOF'
@@ -21744,7 +21902,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.20.6"
+GUARD_VERSION="1.21.0"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -23114,6 +23272,11 @@ geomask_uninstall() {
   fi
   rm -f "$(P /usr/bin/geomask-vpnwatch.sh)"
   rm -f "$(P /usr/bin/geomask-morning-check.sh)"
+  # the lane owns a service and a listener: remove it before deleting the tool that knows how
+  if [ -x "$(P /usr/bin/geomask-lane.sh)" ]; then
+    "$(P /usr/bin/geomask-lane.sh)" remove >/dev/null 2>&1 || warn "lane removal reported a problem"
+    rm -f "$(P /usr/bin/geomask-lane.sh)"
+  fi
   info "removed: vpnwatch (conf /etc/geomask/vpnwatch.conf and the audit log kept)"
   if crontab -l 2>/dev/null | grep -q 'sync_mtrickle_mihomo'; then
     crontab -l 2>/dev/null | grep -v 'sync_mtrickle_mihomo' | crontab - 2>/dev/null && info "cron entry removed"
