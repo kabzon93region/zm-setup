@@ -90,6 +90,7 @@ printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-torrent.sh"; chmod +x "$R/usr
 # v1.18.0: VPN lane audit (step5_check requires script + conf)
 mkdir -p "$R/etc/geomask"
 printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-vpnwatch.sh"; chmod +x "$R/usr/bin/geomask-vpnwatch.sh"
+printf '#!/bin/sh\nexit 0\n' > "$R/usr/bin/geomask-morning-check.sh"; chmod +x "$R/usr/bin/geomask-morning-check.sh"
 printf 'group=VPN-noP2P\nlogfile=/root/geomask-vpn-audit.log\n' > "$R/etc/geomask/vpnwatch.conf"
 mkdir -p "$R/etc/geomask/torrent"
 printf 'payload: []\n' > "$R/etc/mihomo/ruleset/ytvpn.yaml"
@@ -841,6 +842,22 @@ done
 grep -qF 'zapret force: skipped' "$HERE/../assets/sync_mtrickle_mihomo.sh" \
   && { echo "PASS: S28 direction B cannot break the ruleset sync"; pass=$((pass+1)); } \
   || { echo "FAIL: S28 direction B is unguarded"; failn=$((failn+1)); }
+# v1.20.6: group offsets must be absolute - relative ones made the scan claim no group uses
+# the provider, while the group plainly did (VPN uses sub2).
+grep -qF 'yield (name, body_start+start, body_start+pos)' "$HERE/../assets/geomask-node-scan.sh" \
+  && { echo "PASS: S27 group offsets are absolute"; pass=$((pass+1)); } \
+  || { echo "FAIL: S27 group offsets are slice-relative again"; failn=$((failn+1)); }
+# one dead provider must not erase the others
+grep -qF 'if not _ok:' "$HERE/../assets/geomask-node-scan.sh" \
+  && grep -qF 'ok=[' "$HERE/../assets/geomask-node-scan.sh" \
+  && { echo "PASS: S27 fan-out isolates per-provider failures and reports them"; pass=$((pass+1)); } \
+  || { echo "FAIL: S27 fan-out still aborts on one provider"; failn=$((failn+1)); }
+grep -qF 'Турция' "$HERE/../assets/geomask-nodes.conf" \
+  && { echo "PASS: S27 base_filter covers the Cyrillic Turkey"; pass=$((pass+1)); } \
+  || { echo "FAIL: S27 base_filter still misses the Cyrillic Turkey"; failn=$((failn+1)); }
+grep -qF 'geomask-morning-check.sh 755' "$HERE/../geomask.sh.in" \
+  && { echo "PASS: S28 morning check ships with geomask"; pass=$((pass+1)); } \
+  || { echo "FAIL: S28 morning check is not installed"; failn=$((failn+1)); }
 grep -qF 'stall_min_age=5' "$HERE/../assets/geomask-ytwatch.conf" \
   && { echo "PASS: S28 youtube failover threshold is 5 seconds"; pass=$((pass+1)); } \
   || { echo "FAIL: S28 youtube threshold still slow"; failn=$((failn+1)); }
@@ -848,6 +865,22 @@ grep -qF '*/1 * * * * /usr/bin/geomask-ytwatch.sh' "$HERE/../geomask.sh.in" \
   && grep -qF 'ytwatch cron migrated */5 -> */1' "$HERE/../geomask.sh.in" \
   && { echo "PASS: S28 ytwatch cron is */1 and migrates old entries"; pass=$((pass+1)); } \
   || { echo "FAIL: S28 ytwatch cron still 5 min or does not migrate"; failn=$((failn+1)); }
+
+# v1.20.6: every embedded python block must parse. Two shipped bugs (the None sentinel and the
+# missing re.M) were invisible to grep-based tests and only surfaced on the router; this gate
+# catches syntax errors here instead.
+_PYC=''
+for c in python3 python; do if "$c" -c 'pass' >/dev/null 2>&1; then _PYC="$c"; break; fi; done
+if [ -n "$_PYC" ]; then
+  if "$_PYC" "$HERE/../tools/pycheck.py" "$HERE"/../assets/*.sh >"$HERE/state/pycheck.out" 2>&1; then
+    _n=$(grep -c 'parses OK' "$HERE/state/pycheck.out")
+    echo "PASS: S29 embedded python parses ($_n blocks checked)"; pass=$((pass+1))
+  else
+    echo "FAIL: S29 embedded python has a syntax error"; sed 's/^/    | /' "$HERE/state/pycheck.out"; failn=$((failn+1))
+  fi
+else
+  echo "SKIP: S29 python syntax gate (no runnable python)"
+fi
 
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="

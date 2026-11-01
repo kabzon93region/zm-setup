@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.20.5"
+GM_VERSION="1.20.6"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.20.5"
+BACKEND_VERSION="1.20.6"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.20.5';
+var PANEL_VERSION = '1.20.6';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -20334,6 +20334,8 @@ step5_check() {
   else bad "vpnwatch missing (script/conf)"; _need=1; fi
   if crontab -l 2>/dev/null | grep -qE '# geomask-vpnwatch$'; then info "vpnwatch cron */1: present"
   else warn "vpnwatch cron missing - the lane audit will not run"; fi
+  if [ -x "$(P /usr/bin/geomask-morning-check.sh)" ]; then info "morning check: installed"
+  else bad "morning check script missing"; _need=1; fi
   svc_alive magitrickled && info "magitrickle: running" || { bad "magitrickle not running"; _need=1; }
   return $_need
 }
@@ -21334,6 +21336,101 @@ print(json.dumps({'ok': True, 'domains': d, 'raw_ips': i2, 'changed': changed}))
 PYEOF
 
 ASSET_EOF
+  # v1.20.6: morning check - read-only audit the owner runs after the restricted
+  # subscription comes back, before enabling the torrent client again.
+  save_stream /usr/bin/geomask-morning-check.sh 755 <<'ASSET_EOF'
+#!/bin/sh
+# geomask morning check - run BEFORE enabling the torrent client, right after the
+# P2P-restricted subscription comes back. Read-only: it never changes routing.
+#
+#   /root/geomask-morning-check.sh            full check
+#   /root/geomask-morning-check.sh --quick    invariants only (no probes)
+#
+# Exit code 0 = safe to start torrenting. Anything else = read the printed reason.
+Q=${1:-}
+FAIL=0
+ok()   { printf '  OK    %s\n' "$1"; }
+bad()  { printf '  FAIL  %s\n' "$1"; FAIL=$((FAIL+1)); }
+warn() { printf '  WARN  %s\n' "$1"; }
+CFG=/etc/mihomo/config.yaml
+RS=/etc/mihomo/ruleset
+SEC=$(grep -m1 -oE '^secret:[[:space:]]*["'\'']?[^"'\''[:space:]]+' $CFG | sed -E 's/^secret:[[:space:]]*["'\'']?//')
+api() { curl -s -m 8 -H "Authorization: Bearer $SEC" "http://127.0.0.1:9090$1"; }
+
+echo "=== geomask morning check  $(date '+%F %T') ==="
+
+echo
+echo "--- 1. invariants: can P2P reach the restricted slot? ---"
+N=$(awk '/^rules:/{f=1;next} f&&/^[^ ]/{exit} f' $CFG | grep -c 'VPN-noP2P')
+[ "$N" = "0" ] && ok "no rule at all points at VPN-noP2P" || warn "$N rule(s) point at VPN-noP2P - check which"
+P=$(awk '/^rules:/{f=1;next} f&&/^[^ ]/{exit} f' $CFG | grep 'VPN-noP2P$' | grep -cE 'SRC-PORT|DST-PORT|IP-CIDR|NETWORK')
+[ "$P" = "0" ] && ok "none of them is a port/IP/protocol match" || bad "$P port/IP rules on the restricted slot"
+I=$(grep -cE '^\s*-\s*IP-CIDR' $RS/mtrickle.yaml)
+[ "$I" = "0" ] && ok "mtrickle.yaml contains no IP rules" || bad "$I IP rules inside the domain ruleset"
+B=$(grep -cE '^\s*-\s*IP-CIDR' $RS/mtrickle_bulk.yaml)
+[ "$B" -gt 0 ] && ok "mtrickle_bulk.yaml holds the $B IP rules (tolerant lane)" || bad "IP ruleset is empty"
+grep -q 'RULE-SET,mtrickle_bulk,VPN' $CFG && ok "IP ruleset -> VPN (P2P-tolerant)" || bad "IP ruleset is not routed to the tolerant lane"
+A=$(awk '/^rules:/{f=1;next} f&&/^[^ ]/{exit} f' $CFG | grep -n 'RULE-SET,ai,AI' | cut -d: -f1)
+M=$(awk '/^rules:/{f=1;next} f&&/^[^ ]/{exit} f' $CFG | grep -n 'RULE-SET,mtrickle,' | cut -d: -f1)
+[ -n "$A" ] && [ -n "$M" ] && [ "$A" -lt "$M" ] && ok "AI rule is evaluated before the VPN lists ($A < $M)" \
+  || bad "AI rule is not ahead of the VPN lists"
+
+echo
+echo "--- 2. what is loaded where ---"
+for g in VPN VPN-noP2P AI; do
+  J=$(api "/proxies/$g")
+  L=$(printf '%s' "$J" | tr ',' '\n' | grep -m1 '"now":' | sed -E 's/.*"now":"//; s/",?$//')
+  C=$(printf '%s' "$J" | python3 -c 'import json,sys
+try: print(len(json.load(sys.stdin).get("all") or []))
+except Exception: print("?")')
+  printf '  %-11s now=%-34s members=%s\n' "$g" "$L" "$C"
+done
+api '/providers/rules' | tr '{' '\n' | grep -oE '"(ai|mtrickle|mtrickle_bulk|torrentdirect|ytvpn)":\{"[^}]*ruleCount":[0-9]+' \
+  | sed -E 's/\{".*ruleCount"/ = /; s/"//g; s/^/    /'
+
+echo
+echo "--- 3. tracker: attempts against the restricted slot ---"
+/usr/bin/geomask-vpnwatch.sh --report | sed 's/^/  /'
+LINES=$(wc -l < /root/geomask-vpn-audit.log 2>/dev/null || echo 0)
+BARE=$(/usr/bin/geomask-vpnwatch.sh --report | grep -oE 'bare IPs \(P2P-shaped\): [0-9]+' | grep -oE '[0-9]+$')
+[ "${BARE:-0}" = "0" ] && ok "no bare-IP destination ever tried the restricted slot" \
+  || bad "$BARE bare-IP destinations tried it - do NOT start torrenting"
+echo "    (log lines: $LINES; last entry: $(tail -1 /root/geomask-vpn-audit.log 2>/dev/null | cut -c1-19))"
+
+if [ "$Q" = "--quick" ]; then
+  echo; echo "=== quick mode finished: FAIL=$FAIL ==="; exit $([ $FAIL -eq 0 ] && echo 0 || echo 1)
+fi
+
+DEC() { logread | grep -m1 "$1" | sed -E 's/.*using ([A-Za-z0-9_-]+).*/\1/; s/.*match ([A-Za-z0-9_]+) .*/\1/'; }
+echo
+echo "--- 4. live probes through the rule chain (listener 7894) ---"
+for h in openrouter.ai api.openai.com; do
+  C=$(curl -s -o /dev/null -m 12 -x http://192.168.0.1:7894 -w '%{http_code}' "https://$h/" 2>/dev/null)
+  D=$(DEC "$h")
+  [ "$D" = "AI" ] && ok "$h -> AI (http $C)" || bad "$h -> ${D:-unknown}, expected AI"
+done
+C=$(curl -s -o /dev/null -m 12 -x http://192.168.0.1:7894 -w '%{http_code}' http://1337.abcvg.info:80/announce 2>/dev/null)
+D=$(DEC abcvg)
+[ "$D" = "DIRECT" ] && ok "tracker -> DIRECT (http $C)" || warn "tracker -> ${D:-unknown} (expected DIRECT)"
+C=$(curl -s -o /dev/null -m 10 -x http://192.168.0.1:7894 -w '%{http_code}' http://188.165.77.110:56627/ 2>/dev/null)
+D=$(DEC '188.165.77.110')
+[ "$D" = "VPN" ] && ok "peer on an OVH address -> VPN (tolerant lane)" \
+  || { [ "$D" = "VPN-noP2P" ] && bad "peer reached the RESTRICTED slot" || warn "peer -> ${D:-unknown}"; }
+sleep 1
+
+echo
+echo "--- 5. geomask's own verdict ---"
+sh /tmp/geomask.sh --check 2>&1 | tail -2 | sed 's/^/  /'
+
+echo
+if [ $FAIL -eq 0 ]; then
+  echo "=== RESULT: safe to enable the torrent client ==="
+else
+  echo "=== RESULT: $FAIL problem(s) - read the FAIL lines above before torrenting ==="
+fi
+exit $FAIL
+
+ASSET_EOF
   # v1.18.0: VPN lane audit - record what tries to use the P2P-restricted subscription while it
   # is offline, so the operator can see the future load before switching it back on.
   if [ ! -s "$(P /etc/geomask/vpnwatch.conf)" ]; then
@@ -21647,7 +21744,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.20.5"
+GUARD_VERSION="1.20.6"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -21921,12 +22018,17 @@ elif provider.strip()=='all':
         log('sub_provider=all but no proxy-provider with a url was found - refusing to no-op')
         sys.exit(1)
     log('scanning all %d providers: %s' % (len(_provs), ','.join(_provs)))
-    _rc=0
+    # One provider failing must not erase the others: a blocked subscription legitimately
+    # returns a stub, and the guard refuses to rewrite the filter from that. Only fail if
+    # every single pass failed - otherwise the nightly job would glow red forever.
+    _ok=[]; _bad=[]
     for _p in _provs:
-        r=subprocess.run([sys.executable if sys.argv[0].endswith('.py') else '/bin/sh',
-                          '/usr/bin/geomask-node-scan.sh', '--provider', _p])
-        if r.returncode not in (0,): _rc=r.returncode
-    sys.exit(_rc)
+        r=subprocess.run(['/bin/sh', '/usr/bin/geomask-node-scan.sh', '--provider', _p])
+        (_ok if r.returncode==0 else _bad).append(_p)
+    log('all-provider pass done: ok=[%s] failed=[%s]' % (','.join(_ok), ','.join(_bad)))
+    if not _ok:
+        log('every provider failed - nothing was updated'); sys.exit(1)
+    sys.exit(0)
 # v1.13.7: the panel (Remnawave) serves a 1-node stub ("Приложение не поддерживается") to
 # unknown clients, so the scan must identify itself. clash-meta -> YAML, v2rayNG -> links.
 sub_ua=cfgd.get('sub_user_agent','clash-meta')
@@ -22073,15 +22175,19 @@ def group_blocks(cfgtext):
     body_start=i+15
     lines=cfgtext[body_start:].split('\n')
     pos=0; name=None; start=None
+    # offsets must be ABSOLUTE: the caller slices cfgtext with them. Yielding slice-relative
+    # positions made every group read from the wrong place, so provider_of_block never matched
+    # and the scan logged "no group using provider X accepts a name filter" for a group that
+    # plainly did use it.
     for ln in lines:
         if ln and not ln.startswith(' '):
             break
         g=re.match(r'^  - name:\s*(\S.*)$', ln)
         if g:
-            if name is not None: yield (name, start, pos)
+            if name is not None: yield (name, body_start+start, body_start+pos)
             name=g.group(1).strip().strip('"\''); start=pos
         pos+=len(ln)+1
-    if name is not None: yield (name, start, pos)
+    if name is not None: yield (name, body_start+start, body_start+pos)
 
 def provider_of_block(blk):
     u=re.search(r'use:\n((?:[ ]{6}-\s+\S+\n?)+)', blk)
@@ -22177,7 +22283,7 @@ bad_asns=AS210976,AS215540,AS207847
 # Base name filter always kept in exclude-filter (static part).
 # NOTE: emoji flags are NOT matched by country words - a node named only "🇷🇺 <something>"
 # needs the flag itself in this list (added 30.10 after an RU node slipped through).
-base_filter=Россия|Мобильный|РФ|Авто|Russia|Mobile|Auto|Албания|Хорватия|Литва|Латвия|Дания|Финляндия|Albania|Croatia|Lithuania|Latvia|Denmark|Finland|Turkey|United Kingdom|🇷🇺|без рекламы
+base_filter=Россия|Мобильный|РФ|Авто|Russia|Mobile|Auto|Албания|Хорватия|Литва|Латвия|Дания|Финляндия|Albania|Croatia|Lithuania|Latvia|Denmark|Finland|Turkey|Турция|United Kingdom|🇷🇺|без рекламы
 
 # provider name in mihomo config to scan. "all" = every proxy-provider, one pass each (v1.20.4)
 sub_provider=all
@@ -23007,6 +23113,7 @@ geomask_uninstall() {
     crontab -l 2>/dev/null | grep -v 'geomask-vpnwatch' | crontab - 2>/dev/null || true
   fi
   rm -f "$(P /usr/bin/geomask-vpnwatch.sh)"
+  rm -f "$(P /usr/bin/geomask-morning-check.sh)"
   info "removed: vpnwatch (conf /etc/geomask/vpnwatch.conf and the audit log kept)"
   if crontab -l 2>/dev/null | grep -q 'sync_mtrickle_mihomo'; then
     crontab -l 2>/dev/null | grep -v 'sync_mtrickle_mihomo' | crontab - 2>/dev/null && info "cron entry removed"

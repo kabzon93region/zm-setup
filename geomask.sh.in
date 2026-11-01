@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.20.5"
+GM_VERSION="1.20.6"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -1009,6 +1009,8 @@ step5_check() {
   else bad "vpnwatch missing (script/conf)"; _need=1; fi
   if crontab -l 2>/dev/null | grep -qE '# geomask-vpnwatch$'; then info "vpnwatch cron */1: present"
   else warn "vpnwatch cron missing - the lane audit will not run"; fi
+  if [ -x "$(P /usr/bin/geomask-morning-check.sh)" ]; then info "morning check: installed"
+  else bad "morning check script missing"; _need=1; fi
   svc_alive magitrickled && info "magitrickle: running" || { bad "magitrickle not running"; _need=1; }
   return $_need
 }
@@ -1058,6 +1060,11 @@ ASSET_EOF
   mkdir -p "$(P /etc/geomask/torrent)" 2>/dev/null
   save_stream /usr/bin/geomask-torrent.sh 755 <<'ASSET_EOF'
 @@ASSET:geomask-torrent.sh@@
+ASSET_EOF
+  # v1.20.6: morning check - read-only audit the owner runs after the restricted
+  # subscription comes back, before enabling the torrent client again.
+  save_stream /usr/bin/geomask-morning-check.sh 755 <<'ASSET_EOF'
+@@ASSET:geomask-morning-check.sh@@
 ASSET_EOF
   # v1.18.0: VPN lane audit - record what tries to use the P2P-restricted subscription while it
   # is offline, so the operator can see the future load before switching it back on.
@@ -1518,6 +1525,7 @@ geomask_uninstall() {
     crontab -l 2>/dev/null | grep -v 'geomask-vpnwatch' | crontab - 2>/dev/null || true
   fi
   rm -f "$(P /usr/bin/geomask-vpnwatch.sh)"
+  rm -f "$(P /usr/bin/geomask-morning-check.sh)"
   info "removed: vpnwatch (conf /etc/geomask/vpnwatch.conf and the audit log kept)"
   if crontab -l 2>/dev/null | grep -q 'sync_mtrickle_mihomo'; then
     crontab -l 2>/dev/null | grep -v 'sync_mtrickle_mihomo' | crontab - 2>/dev/null && info "cron entry removed"

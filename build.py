@@ -32,6 +32,7 @@ MAP = {
     "geomask-vpnwatch.sh":   "geomask-vpnwatch.sh",
     "geomask-vpnwatch.conf": "geomask-vpnwatch.conf",
     "zapret-force-keep.txt":  "zapret-force-keep.txt",
+    "geomask-morning-check.sh": "geomask-morning-check.sh",
 }
 
 # menu.json asset file on disk (same acl download name collision): we saved menu as second luci-app-geo-sync.json

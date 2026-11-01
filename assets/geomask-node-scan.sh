@@ -75,12 +75,17 @@ elif provider.strip()=='all':
         log('sub_provider=all but no proxy-provider with a url was found - refusing to no-op')
         sys.exit(1)
     log('scanning all %d providers: %s' % (len(_provs), ','.join(_provs)))
-    _rc=0
+    # One provider failing must not erase the others: a blocked subscription legitimately
+    # returns a stub, and the guard refuses to rewrite the filter from that. Only fail if
+    # every single pass failed - otherwise the nightly job would glow red forever.
+    _ok=[]; _bad=[]
     for _p in _provs:
-        r=subprocess.run([sys.executable if sys.argv[0].endswith('.py') else '/bin/sh',
-                          '/usr/bin/geomask-node-scan.sh', '--provider', _p])
-        if r.returncode not in (0,): _rc=r.returncode
-    sys.exit(_rc)
+        r=subprocess.run(['/bin/sh', '/usr/bin/geomask-node-scan.sh', '--provider', _p])
+        (_ok if r.returncode==0 else _bad).append(_p)
+    log('all-provider pass done: ok=[%s] failed=[%s]' % (','.join(_ok), ','.join(_bad)))
+    if not _ok:
+        log('every provider failed - nothing was updated'); sys.exit(1)
+    sys.exit(0)
 # v1.13.7: the panel (Remnawave) serves a 1-node stub ("Приложение не поддерживается") to
 # unknown clients, so the scan must identify itself. clash-meta -> YAML, v2rayNG -> links.
 sub_ua=cfgd.get('sub_user_agent','clash-meta')
@@ -227,15 +232,19 @@ def group_blocks(cfgtext):
     body_start=i+15
     lines=cfgtext[body_start:].split('\n')
     pos=0; name=None; start=None
+    # offsets must be ABSOLUTE: the caller slices cfgtext with them. Yielding slice-relative
+    # positions made every group read from the wrong place, so provider_of_block never matched
+    # and the scan logged "no group using provider X accepts a name filter" for a group that
+    # plainly did use it.
     for ln in lines:
         if ln and not ln.startswith(' '):
             break
         g=re.match(r'^  - name:\s*(\S.*)$', ln)
         if g:
-            if name is not None: yield (name, start, pos)
+            if name is not None: yield (name, body_start+start, body_start+pos)
             name=g.group(1).strip().strip('"\''); start=pos
         pos+=len(ln)+1
-    if name is not None: yield (name, start, pos)
+    if name is not None: yield (name, body_start+start, body_start+pos)
 
 def provider_of_block(blk):
     u=re.search(r'use:\n((?:[ ]{6}-\s+\S+\n?)+)', blk)
