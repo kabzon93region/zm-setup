@@ -870,6 +870,13 @@ grep -qF 'group $LANE_GROUP not found - refusing' "$HERE/../assets/geomask-lane.
 grep -qF 'mihomo -t failed after adding the listener - config restored' "$HERE/../assets/geomask-lane.sh" \
   && { echo "PASS: S30 listener write is validated and rolled back"; pass=$((pass+1)); } \
   || { echo "FAIL: S30 listener write is unvalidated"; failn=$((failn+1)); }
+# v1.22.0: torrent forum sites must go DIRECT - measured 502 through the VPN exit, 301 direct
+grep -qF 'def build_sites' "$HERE/../assets/geomask-torrent.sh" \
+  && { echo "PASS: S36 torrent sites get their own ruleset"; pass=$((pass+1)); } \
+  || { echo "FAIL: S36 sites and trackers share one target"; failn=$((failn+1)); }
+grep -qF 'RULE-SET,torrentsites,DIRECT' "$HERE/../geomask.sh.in" \
+  && { echo "PASS: S36 sites rule precedes the tracker rule in the template"; pass=$((pass+1)); } \
+  || { echo "FAIL: S36 sites would still be pushed into the VPN lane"; failn=$((failn+1)); }
 grep -qF 'geomask-lane.sh 755' "$HERE/../geomask.sh.in" \
   && grep -qF 'geomask-lane.sh)" remove' "$HERE/../geomask.sh.in" \
   && { echo "PASS: S30 lane is installed and removed with geomask"; pass=$((pass+1)); } \

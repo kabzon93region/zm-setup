@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.21.9"
+GM_VERSION="1.22.0"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -252,6 +252,9 @@ step3_check() {
   # v1.14.4: torrents must never be swallowed by the VPN lists (owner policy 30.10)
   # v1.21.7: the owner moved torrent/tracker domains from DIRECT onto the P2P-tolerant VPN
   # lane, so either target is correct now - only a missing ruleset is a problem.
+  grep -qE 'RULE-SET,torrentsites,DIRECT' "$_c" 2>/dev/null \
+    && info "torrent sites -> DIRECT (Cloudflare rejects the VPN exit)" \
+    || warn "torrentsites rule missing - forum sites may return 502 through the VPN lane"
   grep -qE 'RULE-SET,torrentdirect,(DIRECT|VPN)' "$_c" 2>/dev/null \
     && info "torrentdirect rule: present ($(awk -F, '/RULE-SET,torrentdirect/{print $3; exit}' "$_c"))" \
     || warn "torrentdirect rule missing (tracker domains can still go to the wrong subscription)"
@@ -486,6 +489,10 @@ write_mihomo_config() {
     printf '%s\n' '    type: file'
     printf '%s\n' '    behavior: classical'
     printf '%s\n' '    path: /etc/mihomo/ruleset/torrentdirect.yaml'
+    printf '%s\n' '  torrentsites:'
+    printf '%s\n' '    type: file'
+    printf '%s\n' '    behavior: classical'
+    printf '%s\n' '    path: /etc/mihomo/ruleset/torrentsites.yaml'
     printf '\n'
     printf '%s\n' 'rules:'
     printf '%s\n' '  # AUTO-SYNC from magitrickle: /root/sync_mtrickle_mihomo.sh - DO NOT EDIT MANUALLY'
@@ -505,6 +512,9 @@ write_mihomo_config() {
     printf '%s\n' '  - DOMAIN-SUFFIX,cloudflare-ech.com,AI'
     printf '%s\n' '  - RULE-SET,ai,AI'
     printf '%s\n' '  # torrent tracker endpoints (public lists) - DIRECT, after ai so the AI policy always wins'
+    printf '%s\n' '  # v1.22.0: forum/catalog sites stay DIRECT - Cloudflare rejects the VPN exit'
+    printf '%s\n' '  # IPs, so routing them to a VPN makes them unreachable (measured 502 vs 301).'
+    printf '%s\n' '  - RULE-SET,torrentsites,DIRECT'
     printf '%s\n' '  - RULE-SET,torrentdirect,VPN'
     printf '%s\n' '  # torrent client listening port: peers that dial US must not reach the VPN slot;'
     printf '%s\n' '  # with a RESERVE/VPN lane configured geomask repoints this to that lane'
