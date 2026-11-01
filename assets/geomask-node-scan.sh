@@ -78,12 +78,15 @@ elif provider.strip()=='all':
     # One provider failing must not erase the others: a blocked subscription legitimately
     # returns a stub, and the guard refuses to rewrite the filter from that. Only fail if
     # every single pass failed - otherwise the nightly job would glow red forever.
-    _ok=[]; _bad=[]
+    _ok=[]; _bad=[]; _skip=[]
     for _p in _provs:
         r=subprocess.run(['/bin/sh', '/usr/bin/geomask-node-scan.sh', '--provider', _p])
-        (_ok if r.returncode==0 else _bad).append(_p)
-    log('all-provider pass done: ok=[%s] failed=[%s]' % (','.join(_ok), ','.join(_bad)))
-    if not _ok:
+        if r.returncode==0: _ok.append(_p)
+        elif r.returncode==3: _skip.append(_p)
+        else: _bad.append(_p)
+    log('all-provider pass done: ok=[%s] skipped-by-design=[%s] failed=[%s]'
+        % (','.join(_ok), ','.join(_skip), ','.join(_bad)))
+    if not _ok and not _skip:
         log('every provider failed - nothing was updated'); sys.exit(1)
     sys.exit(0)
 # v1.13.7: the panel (Remnawave) serves a 1-node stub ("Приложение не поддерживается") to
@@ -302,8 +305,12 @@ out, changed, matched, touched = apply_filter_all(text, new_filter, provider, NF
 # this provider" and exited 1, so a healthy nightly run failed every night once the filter had
 # settled - and the all-provider pass then declared that every provider had failed.
 if matched == 0:
-    log('no group using provider %s accepts a name filter (name_filter_groups=%s) - nothing done'
-        % (provider, ','.join(NFG))); sys.exit(1)
+    # Not an error: a provider whose groups are deliberately outside name filtering (the AI
+    # subscription is USA-only) will always land here. Reporting it as "failed" made the nightly
+    # log show a broken provider every single night, which is how a guard stops being believed.
+    log('provider %s has no name-filtered group - skipped by design' % provider)
+    print('nodes=%d blocked=%d errors=%d applied=False (no name-filtered group)'
+          % (total, len(blocked), errs)); sys.exit(3)
 if not changed:
     log('filter for provider %s already up to date across %d group(s)' % (provider, matched))
     print('nodes=%d blocked=%d errors=%d applied=False (already up to date)'
