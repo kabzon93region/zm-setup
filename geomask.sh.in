@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.21.1"
+GM_VERSION="1.21.2"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -997,6 +997,19 @@ step5_check() {
   else bad "node-scan missing (script/conf)"; _need=1; fi
   if crontab -l 2>/dev/null | grep -q 'geomask-node-scan'; then info "nodescan cron 03:30: present"; else bad "nodescan cron missing"; _need=1; fi
   # v1.14.0: youtube edge watchdog
+  # v1.21.2: the VPN lane must be able to degrade. A url-test group over a subscription whose
+  # entry host is dead returns 502 for every list routed to it; a fallback group with DIRECT
+  # last keeps the sites reachable and returns to the nodes as soon as they answer again.
+  if grep -qE '^  - name: VPN$' "$_c" 2>/dev/null; then
+    _vt=$(awk '/^  - name: VPN$/{f=1;next} f&&/^  - name:/{exit} f&&/^    type:/{sub(/^[^:]*:[[:space:]]*/,"");print;exit}' "$_c")
+    case "$_vt" in
+      fallback) grep -A14 '^  - name: VPN$' "$_c" | grep -q 'DIRECT' \
+                  && info "VPN lane: fallback with DIRECT last resort" \
+                  || { bad "VPN lane is fallback but has no DIRECT member - it cannot degrade"; _need=1; } ;;
+      url-test) warn "VPN lane is url-test: if the subscription entry host dies, every list routed to it returns 502 (consider fallback + DIRECT)" ;;
+      *)        info "VPN lane type: ${_vt:-unknown}" ;;
+    esac
+  fi
   if [ -x "$(P /usr/bin/geomask-ytwatch.sh)" ] && [ -s "$(P /etc/geomask-ytwatch.conf)" ]; then info "ytwatch: installed"
   else bad "ytwatch missing (script/conf)"; _need=1; fi
   if crontab -l 2>/dev/null | grep -qE '# geomask-ytwatch$'; then info "ytwatch cron */5: present"; else bad "ytwatch cron missing"; _need=1; fi
