@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.21.7"
+GM_VERSION="1.21.8"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.21.7"
+BACKEND_VERSION="1.21.8"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.21.7';
+var PANEL_VERSION = '1.21.8';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -21968,7 +21968,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.21.7"
+GUARD_VERSION="1.21.8"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -22444,13 +22444,14 @@ def apply_filter_all(cfgtext, filt, prov, name_filter_groups):
     group that is not listed in name_filter_groups for the base part."""
     esc=filt.replace("'", "''")
     line="    exclude-filter: '%s'" % esc
-    out=[]; cursor=0; touched=0
+    out=[]; cursor=0; touched=0; matched=0
     for name, s, e in group_blocks(cfgtext):
         blk=cfgtext[s:e]
         if provider_of_block(blk) != prov:
             continue
         if name not in name_filter_groups:
             continue
+        matched += 1
         cleaned='\n'.join(l for l in blk.split('\n') if 'exclude-filter' not in l)
         # insert right after the "use:" list so the YAML stays readable
         ul=re.search(r'(use:\n(?:[ ]{6}-\s+\S+\n)+)', cleaned)
@@ -22460,13 +22461,20 @@ def apply_filter_all(cfgtext, filt, prov, name_filter_groups):
             out.append(cfgtext[cursor:s]); out.append(newblk); cursor=e; touched+=1
     out.append(cfgtext[cursor:])
     joined=''.join(out)
-    return joined, (joined != cfgtext), touched
+    return joined, (joined != cfgtext), matched, touched
 
 NFG=[g.strip() for g in cfgd.get('name_filter_groups','VPN,VPN-noP2P').split(',') if g.strip()]
-out, changed, touched = apply_filter_all(text, new_filter, provider, NFG)
-if touched == 0:
+out, changed, matched, touched = apply_filter_all(text, new_filter, provider, NFG)
+# "nothing to change" is a SUCCESS, not an error. The old code reported it as "no group uses
+# this provider" and exited 1, so a healthy nightly run failed every night once the filter had
+# settled - and the all-provider pass then declared that every provider had failed.
+if matched == 0:
     log('no group using provider %s accepts a name filter (name_filter_groups=%s) - nothing done'
         % (provider, ','.join(NFG))); sys.exit(1)
+if not changed:
+    log('filter for provider %s already up to date across %d group(s)' % (provider, matched))
+    print('nodes=%d blocked=%d errors=%d applied=False (already up to date)'
+          % (total, len(blocked), errs)); sys.exit(0)
 applied=False
 if changed:
     open(CFG+'.bak_nodescan','w',encoding='utf-8').write(text)
