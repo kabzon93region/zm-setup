@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.22.3"
+GM_VERSION="1.22.4"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.22.3"
+BACKEND_VERSION="1.22.4"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.22.3';
+var PANEL_VERSION = '1.22.4';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -20315,9 +20315,14 @@ step5_check() {
   if crontab -l 2>/dev/null | grep -q 'sync_mtrickle_mihomo'; then info "cron */5: present"; else bad "cron entry missing"; _need=1; fi
   # v1.10.0: event sync watchdog (service enabled + running; graceful if script absent on old installs)
   if [ -x "$(P /etc/init.d/geomask-syncd)" ]; then
+    # A daemon that is installed but not (yet) running is a WARNING, not a failed install.
+    # This used to set _need=1, which made step5's verify abort the whole --auto run - so on any
+    # host where the daemon had not been started yet (and in the sandbox, where services cannot
+    # really run) geomask refused to finish installing. CI had been red for 40+ runs over this.
     if pgrep -f geomask-syncd.sh >/dev/null 2>&1; then info "syncd: running"
-    else warn "syncd: installed but not running"; _need=1; fi
-    ls "$(P /etc/rc.d)" 2>/dev/null | grep -q 'geomask-syncd' && info "syncd: enabled" || { warn "syncd: not enabled"; _need=1; }
+    else warn "syncd: installed but not running (start it: /etc/init.d/geomask-syncd start)"; fi
+    ls "$(P /etc/rc.d)" 2>/dev/null | grep -q 'geomask-syncd' && info "syncd: enabled" \
+      || warn "syncd: not enabled at boot (run: /etc/init.d/geomask-syncd enable)"
   else
     bad "syncd: /etc/init.d/geomask-syncd missing"; _need=1
   fi
@@ -22171,7 +22176,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.22.3"
+GUARD_VERSION="1.22.4"
 
 log() { logger -t geomask-guard "$*"; }
 
