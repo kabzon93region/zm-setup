@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.22.5"
+GM_VERSION="1.22.6"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -1177,7 +1177,30 @@ ASSET_EOF
 @@ASSET:geomask-ytwatch.conf@@
 ASSET_EOF
   else
-    info "ytwatch conf: keeping existing /etc/geomask-ytwatch.conf"
+    # Keeping the operator's file must not mean "never learn new options": every key that the
+    # shipped default introduces is appended if absent. Existing values are never touched -
+    # that is how blanket_permanent failed to reach a live router and had to be added by hand.
+    save_stream /tmp/geomask-ytwatch.conf.new 644 <<'ASSET_EOF'
+@@ASSET:geomask-ytwatch.conf@@
+ASSET_EOF
+    _added=$(python3 - "$(P /etc/geomask-ytwatch.conf)" /tmp/geomask-ytwatch.conf.new <<'PYEOF'
+import sys
+live_p, new_p = sys.argv[1], sys.argv[2]
+live=open(live_p,encoding='utf-8',errors='replace').read()
+have={l.split('=',1)[0].strip() for l in live.splitlines() if '=' in l and not l.strip().startswith('#')}
+add=[l for l in open(new_p,encoding='utf-8',errors='replace').read().splitlines()
+     if '=' in l and not l.strip().startswith('#') and l.split('=',1)[0].strip() not in have]
+if add:
+    open(live_p,'a',encoding='utf-8',newline='\n').write('\n# added by geomask upgrade\n'+'\n'.join(add)+'\n')
+print(len(add))
+PYEOF
+) || _added=0
+    rm -f /tmp/geomask-ytwatch.conf.new
+    if [ "${_added:-0}" != "0" ]; then
+      info "ytwatch conf: kept existing settings, added $_added new option(s)"
+    else
+      info "ytwatch conf: keeping existing /etc/geomask-ytwatch.conf"
+    fi
   fi
   # v1.20.4: the scan runs every minute (was */5). An old entry is rewritten in place.
   if crontab -l 2>/dev/null | grep -qE '# geomask-ytwatch$'; then

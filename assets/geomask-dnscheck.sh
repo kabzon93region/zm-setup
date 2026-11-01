@@ -116,12 +116,19 @@ for f in os.listdir('/etc/mihomo/ruleset') if os.path.isdir('/etc/mihomo/ruleset
 def is_tunneled(names):
     return any(n == t or n.endswith('.'+t) for n in names for t in tunneled)
 def via_chain(host):
-    try:
-        out=subprocess.run(['curl','-s','-o','/dev/null','-m','12','-x','http://127.0.0.1:7894',
-                            '-w','%{http_code}','https://%s/'%host], capture_output=True, text=True).stdout
-        return out.isdigit() and out != '000'
-    except Exception:
-        return False
+    # 7894 is the TORRENT listener, not a general path - judging a pin by it produced false
+    # alarms (rutor.info answers 200 directly and through both lanes, but 000 via 7894).
+    # A tunneled pin is only dead if no lane can serve it at all.
+    for port in (7891, 7892, 7894):
+        try:
+            code=subprocess.run(['curl','-s','-o','/dev/null','-m','12','-x','http://127.0.0.1:%d'%port,
+                                 '-w','%{http_code}','https://%s/'%host],
+                                capture_output=True, text=True).stdout
+            if code.isdigit() and code != '000':
+                return True
+        except Exception:
+            pass
+    return False
 dead_direct=[]; dead_chain=[]; alive=0; tun=0
 seen=set()
 for ln in open('/etc/hosts', encoding='utf-8', errors='replace'):
@@ -147,7 +154,7 @@ for ln in open('/etc/hosts', encoding='utf-8', errors='replace'):
     else: dead_direct.append((ip, names[0], len(names)))
 print('  pinned addresses: %d total (%d of them belong to tunneled names)' % (len(seen), tun))
 for ip, host in dead_chain:
-    print('  WARN  %s (%s) is pinned and tunneled, but the chain cannot reach it either' % (ip, host))
+    print('  WARN  %s (%s) is pinned and tunneled, but NO lane can serve it' % (ip, host))
 for ip, host, n in dead_direct[:10]:
     print('  WARN  %s (serves %d name%s, e.g. %s) answers neither directly - clients dial a dead address'
           % (ip, n, 's' if n>1 else '', host))

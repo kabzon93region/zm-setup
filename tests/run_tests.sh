@@ -1038,6 +1038,20 @@ grep -qF 'is_tunneled' "$HERE/../assets/geomask-dnscheck.sh" \
   && { echo "PASS: S39 tunneled pins are probed through the lane, not directly"; pass=$((pass+1)); } \
   || { echo "FAIL: S39 the pin check will cry wolf on AI pins"; failn=$((failn+1)); }
 
+# v1.22.6: an upgrade must teach an existing config the new options, not freeze it
+grep -qF 'added $_added new option(s)' "$HERE/../geomask.sh.in" \
+  && { echo "PASS: S40 conf upgrade appends missing keys"; pass=$((pass+1)); } \
+  || { echo "FAIL: S40 a new option would never reach an existing router"; failn=$((failn+1)); }
+if grep -A22 'ytwatch conf: kept existing' "$HERE/../geomask.sh.in" | grep -qE "sed -i|'> *\"?\$\(P /etc/geomask-ytwatch"; then
+  echo "FAIL: S40 the upgrade overwrites operator values"; failn=$((failn+1))
+else
+  echo "PASS: S40 the upgrade only appends absent keys"; pass=$((pass+1))
+fi
+# a tunneled pin must be judged by every lane, not by the torrent listener
+grep -qF 'for port in (7891, 7892, 7894)' "$HERE/../assets/geomask-dnscheck.sh" \
+  && { echo "PASS: S40 tunneled pins are tried through all lanes"; pass=$((pass+1)); } \
+  || { echo "FAIL: S40 pins are still judged by the torrent listener only"; failn=$((failn+1)); }
+
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="
 [ "$failn" -eq 0 ]

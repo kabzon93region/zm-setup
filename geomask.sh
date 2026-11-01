@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.22.5"
+GM_VERSION="1.22.6"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.22.5"
+BACKEND_VERSION="1.22.6"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.22.5';
+var PANEL_VERSION = '1.22.6';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -21554,12 +21554,19 @@ for f in os.listdir('/etc/mihomo/ruleset') if os.path.isdir('/etc/mihomo/ruleset
 def is_tunneled(names):
     return any(n == t or n.endswith('.'+t) for n in names for t in tunneled)
 def via_chain(host):
-    try:
-        out=subprocess.run(['curl','-s','-o','/dev/null','-m','12','-x','http://127.0.0.1:7894',
-                            '-w','%{http_code}','https://%s/'%host], capture_output=True, text=True).stdout
-        return out.isdigit() and out != '000'
-    except Exception:
-        return False
+    # 7894 is the TORRENT listener, not a general path - judging a pin by it produced false
+    # alarms (rutor.info answers 200 directly and through both lanes, but 000 via 7894).
+    # A tunneled pin is only dead if no lane can serve it at all.
+    for port in (7891, 7892, 7894):
+        try:
+            code=subprocess.run(['curl','-s','-o','/dev/null','-m','12','-x','http://127.0.0.1:%d'%port,
+                                 '-w','%{http_code}','https://%s/'%host],
+                                capture_output=True, text=True).stdout
+            if code.isdigit() and code != '000':
+                return True
+        except Exception:
+            pass
+    return False
 dead_direct=[]; dead_chain=[]; alive=0; tun=0
 seen=set()
 for ln in open('/etc/hosts', encoding='utf-8', errors='replace'):
@@ -21585,7 +21592,7 @@ for ln in open('/etc/hosts', encoding='utf-8', errors='replace'):
     else: dead_direct.append((ip, names[0], len(names)))
 print('  pinned addresses: %d total (%d of them belong to tunneled names)' % (len(seen), tun))
 for ip, host in dead_chain:
-    print('  WARN  %s (%s) is pinned and tunneled, but the chain cannot reach it either' % (ip, host))
+    print('  WARN  %s (%s) is pinned and tunneled, but NO lane can serve it' % (ip, host))
 for ip, host, n in dead_direct[:10]:
     print('  WARN  %s (serves %d name%s, e.g. %s) answers neither directly - clients dial a dead address'
           % (ip, n, 's' if n>1 else '', host))
@@ -22207,7 +22214,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.22.5"
+GUARD_VERSION="1.22.6"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -23247,7 +23254,78 @@ group_name=GoogleVideo VPN
 
 ASSET_EOF
   else
-    info "ytwatch conf: keeping existing /etc/geomask-ytwatch.conf"
+    # Keeping the operator's file must not mean "never learn new options": every key that the
+    # shipped default introduces is appended if absent. Existing values are never touched -
+    # that is how blanket_permanent failed to reach a live router and had to be added by hand.
+    save_stream /tmp/geomask-ytwatch.conf.new 644 <<'ASSET_EOF'
+# geomask youtube-edge watcher configuration (v1.14.0+)
+# Decides how googlevideo.com (YouTube video edges) is routed. The edges are IP-blocked
+# per-host by RKN, and Google rotates the hostnames, so a static list always lags behind.
+
+# Routing mode:
+#   auto    - edges go DIRECT (zapret/DPI); only hosts that actually fail get pinned to VPN
+#   blanket - every *.googlevideo.com goes to VPN (the v1.13.x behaviour)
+mode=auto
+
+# Pin a host after this many failed dials inside the window (avoid pinning on one blip)
+fail_threshold=2
+
+# Consider failures from the last N minutes when scanning the log
+window_min=30
+
+# --- stalled-edge detection (v1.15.2) ---
+# DPI can kill a stream AFTER the TCP handshake; mihomo then logs no error at all, so the
+# log scan above sees nothing. Such a connection still shows up in the controller API as
+# "alive a long time, almost nothing downloaded". That is what these thresholds define:
+# a *.googlevideo.com connection routed DIRECT, older than stall_min_age seconds, with less
+# than stall_max_bytes downloaded (a bare TLS handshake is only a few KB).
+# A connection must be quiet for this long (SECONDS) before it counts at all.
+stall_min_age=30
+stall_max_bytes=10000
+# how many quiet connections the SAME host must show in one sample. This is the real
+# discriminator: a DPI-killed edge produces a swarm (dozens), a healthy player produces a
+# couple of idle prefetch/keep-alive connections. 5s + 1 connection pinned healthy edges and
+# made the TV stall every minute (owner, 01.11).
+stall_min_conns=3
+# consecutive samples a stalled host must appear in before pinning (cron runs every 1 min,
+# so this is ~4 minutes of sustained evidence)
+stall_threshold=4
+# The player gives up on an edge after 10-15s and reconnects on ANOTHER one, so a per-edge pin
+# is almost always applied to an edge the player already left. Therefore: when this many distinct
+# edges look quiet in the same sample, the whole googlevideo class goes to VPN as ONE rule
+# (blanket), because that is the only thing the player cannot rotate away from. It comes back
+# down automatically after blanket_off_after clean samples (~20 minutes).
+blanket_when=4
+blanket_off_after=20
+# v1.22.5: owner decision - keep ALL of googlevideo.com on the VPN all the time.
+# 1 = never downgrade to per-edge mode, and restore the blanket rule if it disappears.
+blanket_permanent=1
+
+# Hard cap on automatically pinned hosts; when reached the watcher stops pinning and logs
+max_pins=40
+
+# MagiTrickle group that feeds ytvpn.yaml (created by geomask, editable at :8080)
+group_name=GoogleVideo VPN
+
+ASSET_EOF
+    _added=$(python3 - "$(P /etc/geomask-ytwatch.conf)" /tmp/geomask-ytwatch.conf.new <<'PYEOF'
+import sys
+live_p, new_p = sys.argv[1], sys.argv[2]
+live=open(live_p,encoding='utf-8',errors='replace').read()
+have={l.split('=',1)[0].strip() for l in live.splitlines() if '=' in l and not l.strip().startswith('#')}
+add=[l for l in open(new_p,encoding='utf-8',errors='replace').read().splitlines()
+     if '=' in l and not l.strip().startswith('#') and l.split('=',1)[0].strip() not in have]
+if add:
+    open(live_p,'a',encoding='utf-8',newline='\n').write('\n# added by geomask upgrade\n'+'\n'.join(add)+'\n')
+print(len(add))
+PYEOF
+) || _added=0
+    rm -f /tmp/geomask-ytwatch.conf.new
+    if [ "${_added:-0}" != "0" ]; then
+      info "ytwatch conf: kept existing settings, added $_added new option(s)"
+    else
+      info "ytwatch conf: keeping existing /etc/geomask-ytwatch.conf"
+    fi
   fi
   # v1.20.4: the scan runs every minute (was */5). An old entry is rewritten in place.
   if crontab -l 2>/dev/null | grep -qE '# geomask-ytwatch$'; then
