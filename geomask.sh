@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.21.3"
+GM_VERSION="1.21.4"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.21.3"
+BACKEND_VERSION="1.21.4"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.21.3';
+var PANEL_VERSION = '1.21.4';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -21348,6 +21348,13 @@ print(json.dumps({'ok': True, 'domains': d, 'raw_ips': i2, 'changed': changed}))
 PYEOF
 
 ASSET_EOF
+  # v1.21.4: keep an existing lane across reinstalls - it carries an interface the owner may have
+  # assigned MagiTrickle lists to, and losing it silently reroutes those lists.
+  if [ -e "$(P /sys/class/net/VPN-noP2P)" ] && [ -x "$(P /usr/bin/geomask-lane.sh)" ]; then
+    info "lane VPN-noP2P: already present, left untouched"
+  elif [ -x "$(P /usr/bin/geomask-lane.sh)" ] && [ -n "$GM_AUTO_LANE" ]; then
+    "$(P /usr/bin/geomask-lane.sh)" install >/dev/null 2>&1 || warn "lane install failed"
+  fi
   # v1.21.0: extra tunnel lane - gives MagiTrickle's interface dropdown a real netdev that
   # always exits through the restricted subscription, so a list can be pointed at it directly.
   save_stream /usr/bin/geomask-lane.sh 755 <<'ASSET_EOF'
@@ -21908,7 +21915,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.21.3"
+GUARD_VERSION="1.21.4"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -23335,11 +23342,13 @@ geomask_uninstall() {
   fi
   rm -f "$(P /usr/bin/geomask-vpnwatch.sh)"
   rm -f "$(P /usr/bin/geomask-morning-check.sh)"
-  # the lane owns a service and a listener: remove it before deleting the tool that knows how
-  if [ -x "$(P /usr/bin/geomask-lane.sh)" ]; then
+  # The lane owns a service and a listener. Remove it ONLY on a real uninstall: --reinstall goes
+  # through this function too, and wiping the lane there silently deletes an interface the owner
+  # has assigned MagiTrickle lists to (same class of bug as the YouTube pins, fixed in v1.20.x).
+  if [ -z "$1" ] && [ -x "$(P /usr/bin/geomask-lane.sh)" ]; then
     "$(P /usr/bin/geomask-lane.sh)" remove >/dev/null 2>&1 || warn "lane removal reported a problem"
-    rm -f "$(P /usr/bin/geomask-lane.sh)"
   fi
+  rm -f "$(P /usr/bin/geomask-lane.sh)"
   info "removed: vpnwatch (conf /etc/geomask/vpnwatch.conf and the audit log kept)"
   if crontab -l 2>/dev/null | grep -q 'sync_mtrickle_mihomo'; then
     crontab -l 2>/dev/null | grep -v 'sync_mtrickle_mihomo' | crontab - 2>/dev/null && info "cron entry removed"

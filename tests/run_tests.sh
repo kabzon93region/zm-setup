@@ -927,6 +927,12 @@ _o=$(grep -oE "E\('button', b[VAN]," "$HERE/../assets/geo-sync-page.js" | grep -
 [ "$_o" = "V A N " ] && { echo "PASS: S31 assignment buttons ordered VPN, AI, VPN-noP2P"; pass=$((pass+1)); } \
   || { echo "FAIL: S31 assignment buttons ordered '$_o'"; failn=$((failn+1)); }
 
+# v1.21.4: --reinstall runs the uninstall path too, and it used to destroy the lane - which
+# silently deleted an interface the owner had already assigned MagiTrickle lists to.
+grep -qF 'if [ -z "$1" ] && [ -x "$(P /usr/bin/geomask-lane.sh)" ]' "$HERE/../geomask.sh.in" \
+  && { echo "PASS: S32 lane survives --reinstall (removed only on a real uninstall)"; pass=$((pass+1)); } \
+  || { echo "FAIL: S32 a reinstall would delete the lane and its interface"; failn=$((failn+1)); }
+
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="
 [ "$failn" -eq 0 ]
