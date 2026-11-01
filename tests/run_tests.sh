@@ -898,9 +898,11 @@ if grep -qE '^\s*\[ .* \] && (warn|ok|bad) .* \|\| .*\[ ' "$HERE/../assets/geoma
 else
   echo "PASS: S37 verdicts use if/elif, not && || chains"; pass=$((pass+1))
 fi
-grep -qF 'PIPESTATUS' "$HERE/../assets/geomask-morning-check.sh" \
-  && { echo "FAIL: S37 morning check uses a bash-only variable ash lacks"; failn=$((failn+1)); } \
-  || { echo "PASS: S37 morning check stays ash-compatible"; pass=$((pass+1)); }
+if grep -v '^[[:space:]]*#' "$HERE/../assets/geomask-morning-check.sh" | grep -qF 'PIPESTATUS'; then
+  echo "FAIL: S37 morning check uses a bash-only variable ash lacks"; failn=$((failn+1))
+else
+  echo "PASS: S37 morning check stays ash-compatible"; pass=$((pass+1))
+fi
 grep -qF 'geomask-lane.sh 755' "$HERE/../geomask.sh.in" \
   && grep -qF 'geomask-lane.sh)" remove' "$HERE/../geomask.sh.in" \
   && { echo "PASS: S30 lane is installed and removed with geomask"; pass=$((pass+1)); } \
