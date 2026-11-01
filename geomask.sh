@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.21.2"
+GM_VERSION="1.21.3"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.21.2"
+BACKEND_VERSION="1.21.3"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -988,9 +988,9 @@ newp = "slot"
 while re.search(r"(?m)^  %s:\n" % newp, t):
     newp = "slot%d" % (int(newp[4:]) + 1 if newp != "slot" else 2)
 prov = newp
-tpl = ("  %s:\n    type: http\n    url: \\"%s\\"\n    interval: 3600\n"
-       "    health-check:\n      enable: true\n      url: \\"https://www.gstatic.com/generate_204\\"\\n"
-       "      interval: 180\n      timeout: 5\n      expected-status: 204\\n" % (prov, url))
+# v1.21.3: no provider health-check here on purpose - mihomo drops nodes that fail it from the
+# group, which silently empties a lane and turns every rule using it into 502s.
+tpl = ("  %s:\n    type: http\n    url: \\"%s\\"\n    interval: 3600\\n" % (prov, url))
 am = re.search(r"(?m)^  de5:\n", t) or re.search(r"(?m)^  sub:\n", t)
 if not am:
     sys.stderr.write("no proxy-providers anchor\\n"); sys.exit(2)
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.21.2';
+var PANEL_VERSION = '1.21.3';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -1986,7 +1986,7 @@ return view.extend({
 			E('div', { 'class': 'gs-counter' }, [ E('div', { 'class': 'gs-num' }, String(st.ai_rules != null ? st.ai_rules : '—')),
 				E('div', { 'class': 'gs-cap' }, 'правил ИИ-пути (ai.yaml → AI)') ]),
 			E('div', { 'class': 'gs-counter' }, [ E('div', { 'class': 'gs-num' }, String(st.mt_rules != null ? st.mt_rules : '—')),
-				E('div', { 'class': 'gs-cap' }, 'правил общего пути (mtrickle.yaml → VPN-noP2P)') ]),
+				E('div', { 'class': 'gs-cap' }, 'правил общего пути (mtrickle.yaml → VPN)') ]),
 			E('div', { 'class': 'gs-counter' }, [ E('div', { 'class': 'gs-num' }, String(st.n_bypass != null ? st.n_bypass : (st.devices || []).length)),
 				E('div', { 'class': 'gs-cap' }, 'мимо VPN (реальный IP)') ])
 		]);
@@ -1994,7 +1994,7 @@ return view.extend({
 		var hero = E('div', { 'class': 'gs-hero' }, [
 			E('h2', {}, 'Гео-маскировка и маршрутизация AI'),
 			E('div', { 'class': 'gs-sub' }, 'Google и ИИ-сервисы идут через AI-подписку (какую страну видит Google — показывает блок выше), всё остальное — через общую VPN.'),
-			E('div', { 'class': 'gs-duo' }, [ aiSub, vpnSub, laneSub ]),
+			E('div', { 'class': 'gs-duo' }, [ laneSub, aiSub, vpnSub ]),
 			counters
 		]);
 		panels.obzor.appendChild(hero);
@@ -2010,8 +2010,8 @@ return view.extend({
 			var isAi = !!(st.ai_sub && st.ai_sub === s.id);
 			var dest = [];
 			if (isVpn)   dest.push(E('span', { 'class': 'gs-badge gs-on' }, 'VPN'));
-			if (isVpnNP) dest.push(E('span', { 'class': 'gs-badge gs-warn' }, 'VPN-noP2P'));
 			if (isAi)    dest.push(E('span', { 'class': 'gs-badge gs-ok' }, 'AI'));
+			if (isVpnNP) dest.push(E('span', { 'class': 'gs-badge gs-warn' }, 'VPN-noP2P'));
 			if (!dest.length) dest = ['—'];
 			var bV = { 'class': 'gs-btn gs-btn-use' + (isVpn ? ' gs-btn-vpn-on' : ''), 'title': isVpn ? 'Эта подписка держит слот VPN (P2P разрешён)' : 'Отдать слот VPN (полоса для торрентов и IP-списков) этой подписке' };
 			bV.click = function() {
@@ -2030,9 +2030,9 @@ return view.extend({
 				E('td', { 'class': 'gs-subs-url' }, maskUrl(s.url)),
 				E('td', {}, dest),
 				E('td', { 'class': 'gs-subs-actions' }, [
-					E('button', bN, '→ VPN-noP2P'),
 					E('button', bV, '→ VPN'),
 					E('button', bA, '→ AI'),
+					E('button', bN, '→ VPN-noP2P'),
 					E('button', bD, 'Удалить')
 				])
 			]);
@@ -3066,21 +3066,14 @@ write_mihomo_config() {
     fi
     printf '%s\n' "    url: \"$_vpnu\""
     printf '%s\n' '    interval: 3600'
-    printf '%s\n' '    health-check:'
-    printf '%s\n' '      enable: true'
-    printf '%s\n' '      interval: 180'
-    printf '%s\n' '      url: "https://www.gstatic.com/generate_204"'
-    printf '%s\n' '      expected-status: 204'
+    # NO provider health-check on purpose (v1.21.3): mihomo removes nodes that fail it from the
+    # group, so a slow or briefly unreachable subscription silently empties the lane and every
+    # rule pointing at it starts returning 502. The proxy-group tests are enough.
     printf '%s\n' '  de5:'
     printf '%s\n' '    type: http'
     printf '%s\n' '    proxy: DIRECT'
     printf '%s\n' "    url: \"$_aiu\""
     printf '%s\n' '    interval: 3600'
-    printf '%s\n' '    health-check:'
-    printf '%s\n' '      enable: true'
-    printf '%s\n' '      interval: 180'
-    printf '%s\n' '      url: "https://www.gstatic.com/generate_204"'
-    printf '%s\n' '      expected-status: 204'
     printf '\n'
     printf '%s\n' 'proxy-groups:'
     printf '%s\n' '  # slot VPN-noP2P: the subscription whose provider forbids P2P (default tunnel).'
@@ -21915,7 +21908,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.21.2"
+GUARD_VERSION="1.21.3"
 
 log() { logger -t geomask-guard "$*"; }
 

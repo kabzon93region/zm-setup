@@ -806,9 +806,9 @@ newp = "slot"
 while re.search(r"(?m)^  %s:\n" % newp, t):
     newp = "slot%d" % (int(newp[4:]) + 1 if newp != "slot" else 2)
 prov = newp
-tpl = ("  %s:\n    type: http\n    url: \\"%s\\"\n    interval: 3600\n"
-       "    health-check:\n      enable: true\n      url: \\"https://www.gstatic.com/generate_204\\"\\n"
-       "      interval: 180\n      timeout: 5\n      expected-status: 204\\n" % (prov, url))
+# v1.21.3: no provider health-check here on purpose - mihomo drops nodes that fail it from the
+# group, which silently empties a lane and turns every rule using it into 502s.
+tpl = ("  %s:\n    type: http\n    url: \\"%s\\"\n    interval: 3600\\n" % (prov, url))
 am = re.search(r"(?m)^  de5:\n", t) or re.search(r"(?m)^  sub:\n", t)
 if not am:
     sys.stderr.write("no proxy-providers anchor\\n"); sys.exit(2)

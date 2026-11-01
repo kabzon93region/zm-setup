@@ -911,6 +911,22 @@ else
   echo "SKIP: S29 python syntax gate (no runnable python)"
 fi
 
+# v1.21.3: a provider health-check removes failing nodes from the group, which emptied the VPN
+# lane and turned every list into 502s (owner: "server banners appear, then disappear").
+if grep -nE 'health-check:' "$HERE/../geomask.sh.in" | grep -vE '^[0-9]+:[[:space:]]*#|NO provider' | grep -q .; then
+  echo "FAIL: S31 the installer template still creates a provider health-check"; failn=$((failn+1))
+else
+  echo "PASS: S31 no provider health-check in the template"; pass=$((pass+1))
+fi
+if grep -nE 'health-check:' "$HERE/../assets/geo-backend.sh" | grep -v '^[0-9]*:#' | grep -q .; then
+  echo "FAIL: S31 adding a subscription from the panel would reintroduce it"; failn=$((failn+1))
+else
+  echo "PASS: S31 no provider health-check when adding a subscription"; pass=$((pass+1))
+fi
+_o=$(grep -oE "E\('button', b[VAN]," "$HERE/../assets/geo-sync-page.js" | grep -oE 'b[VAN]' | tr -d 'b' | tr '\n' ' ')
+[ "$_o" = "V A N " ] && { echo "PASS: S31 assignment buttons ordered VPN, AI, VPN-noP2P"; pass=$((pass+1)); } \
+  || { echo "FAIL: S31 assignment buttons ordered '$_o'"; failn=$((failn+1)); }
+
 echo ""
 echo "== SANDBOX RESULT: pass=$pass fail=$failn =="
 [ "$failn" -eq 0 ]

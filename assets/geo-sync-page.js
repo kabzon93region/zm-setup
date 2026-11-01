@@ -299,7 +299,7 @@ return view.extend({
 			E('div', { 'class': 'gs-counter' }, [ E('div', { 'class': 'gs-num' }, String(st.ai_rules != null ? st.ai_rules : '—')),
 				E('div', { 'class': 'gs-cap' }, 'правил ИИ-пути (ai.yaml → AI)') ]),
 			E('div', { 'class': 'gs-counter' }, [ E('div', { 'class': 'gs-num' }, String(st.mt_rules != null ? st.mt_rules : '—')),
-				E('div', { 'class': 'gs-cap' }, 'правил общего пути (mtrickle.yaml → VPN-noP2P)') ]),
+				E('div', { 'class': 'gs-cap' }, 'правил общего пути (mtrickle.yaml → VPN)') ]),
 			E('div', { 'class': 'gs-counter' }, [ E('div', { 'class': 'gs-num' }, String(st.n_bypass != null ? st.n_bypass : (st.devices || []).length)),
 				E('div', { 'class': 'gs-cap' }, 'мимо VPN (реальный IP)') ])
 		]);
@@ -307,7 +307,7 @@ return view.extend({
 		var hero = E('div', { 'class': 'gs-hero' }, [
 			E('h2', {}, 'Гео-маскировка и маршрутизация AI'),
 			E('div', { 'class': 'gs-sub' }, 'Google и ИИ-сервисы идут через AI-подписку (какую страну видит Google — показывает блок выше), всё остальное — через общую VPN.'),
-			E('div', { 'class': 'gs-duo' }, [ aiSub, vpnSub, laneSub ]),
+			E('div', { 'class': 'gs-duo' }, [ laneSub, aiSub, vpnSub ]),
 			counters
 		]);
 		panels.obzor.appendChild(hero);
@@ -323,8 +323,8 @@ return view.extend({
 			var isAi = !!(st.ai_sub && st.ai_sub === s.id);
 			var dest = [];
 			if (isVpn)   dest.push(E('span', { 'class': 'gs-badge gs-on' }, 'VPN'));
-			if (isVpnNP) dest.push(E('span', { 'class': 'gs-badge gs-warn' }, 'VPN-noP2P'));
 			if (isAi)    dest.push(E('span', { 'class': 'gs-badge gs-ok' }, 'AI'));
+			if (isVpnNP) dest.push(E('span', { 'class': 'gs-badge gs-warn' }, 'VPN-noP2P'));
 			if (!dest.length) dest = ['—'];
 			var bV = { 'class': 'gs-btn gs-btn-use' + (isVpn ? ' gs-btn-vpn-on' : ''), 'title': isVpn ? 'Эта подписка держит слот VPN (P2P разрешён)' : 'Отдать слот VPN (полоса для торрентов и IP-списков) этой подписке' };
 			bV.click = function() {
@@ -343,9 +343,9 @@ return view.extend({
 				E('td', { 'class': 'gs-subs-url' }, maskUrl(s.url)),
 				E('td', {}, dest),
 				E('td', { 'class': 'gs-subs-actions' }, [
-					E('button', bN, '→ VPN-noP2P'),
 					E('button', bV, '→ VPN'),
 					E('button', bA, '→ AI'),
+					E('button', bN, '→ VPN-noP2P'),
 					E('button', bD, 'Удалить')
 				])
 			]);
