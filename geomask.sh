@@ -21474,8 +21474,15 @@ for pkg in https-dns-proxy adblock-fast; do
   v=$(uci get $pkg.config.force_dns 2>/dev/null)
   [ "$v" = "1" ] && { NFORCE=$((NFORCE+1)); echo "  $pkg claims force_dns"; }
 done
-[ "$NFORCE" -gt 1 ] && warn "$NFORCE packages both force-redirect DNS - one of them must win, and the usual outcome is a loop" \
-  || [ "$NFORCE" = "1" ] && ok "exactly one package forces DNS redirection" || ok "no package forces DNS redirection"
+# NOTE: use if/elif here. The old `cond && warn ... || ok ...` chain printed BOTH lines,
+# because warn() succeeds, so the following || branch still ran.
+if [ "$NFORCE" -gt 1 ]; then
+  warn "$NFORCE packages both force-redirect DNS - one of them must win, and the usual outcome is a loop"
+elif [ "$NFORCE" = "1" ]; then
+  ok "exactly one package forces DNS redirection"
+else
+  ok "no package forces DNS redirection"
+fi
 if [ -n "$DOH_PORT" ]; then
   REDIR=$(nft list ruleset 2>/dev/null | grep -E 'dport 53' | grep -c "redirect to :$DOH_PORT")
   [ "$REDIR" -gt 0 ] && warn "port 53 is redirected to the DoH proxy :$DOH_PORT - if its bootstrap also uses :53, DNS dies" \
@@ -21514,8 +21521,11 @@ else
   ok "no https-dns-proxy bootstrap configured"
 fi
 FAM=$(uci get https-dns-proxy.config.force_ip_family 2>/dev/null)
-[ "$FAM" = "auto" ] && warn "force_ip_family=auto - pin it to 4 (or 6) so the proxy cannot pick a path it redirects itself" \
-  || [ -n "$FAM" ] && ok "force_ip_family=$FAM"
+if [ "$FAM" = "auto" ]; then
+  warn "force_ip_family=auto - pin it to 4 (or 6) so the proxy cannot pick a path it redirects itself"
+elif [ -n "$FAM" ]; then
+  ok "force_ip_family=$FAM"
+fi
 
 echo
 echo "--- 4) stale bypass pins in /etc/hosts (the Telegram case) ---"
@@ -21805,8 +21815,15 @@ sh /tmp/geomask.sh --check 2>&1 | tail -2 | sed 's/^/  /'
 echo
 echo "--- 6. DNS safety (stale bypass pins, redirect loops) ---"
 if [ -x /usr/bin/geomask-dnscheck.sh ]; then
-  /usr/bin/geomask-dnscheck.sh --quick 2>&1 | grep -E 'FAIL|WARN|RESULT' | sed 's/^/  /'
-  [ "${PIPESTATUS[0]:-0}" = "0" ] || true
+  # ash has no PIPESTATUS - capture the exit code directly
+  _dnsout=$(mktemp)
+  if /usr/bin/geomask-dnscheck.sh --quick >"$_dnsout" 2>&1; then
+    grep -E 'FAIL|WARN|RESULT' "$_dnsout" | sed 's/^/  /'
+  else
+    grep -E 'FAIL|WARN|RESULT' "$_dnsout" | sed 's/^/  /'
+    bad "the DNS audit reported a failure"
+  fi
+  rm -f "$_dnsout"
 else
   echo "  (geomask-dnscheck.sh not installed)"
 fi

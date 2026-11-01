@@ -84,8 +84,15 @@ sh /tmp/geomask.sh --check 2>&1 | tail -2 | sed 's/^/  /'
 echo
 echo "--- 6. DNS safety (stale bypass pins, redirect loops) ---"
 if [ -x /usr/bin/geomask-dnscheck.sh ]; then
-  /usr/bin/geomask-dnscheck.sh --quick 2>&1 | grep -E 'FAIL|WARN|RESULT' | sed 's/^/  /'
-  [ "${PIPESTATUS[0]:-0}" = "0" ] || true
+  # ash has no PIPESTATUS - capture the exit code directly
+  _dnsout=$(mktemp)
+  if /usr/bin/geomask-dnscheck.sh --quick >"$_dnsout" 2>&1; then
+    grep -E 'FAIL|WARN|RESULT' "$_dnsout" | sed 's/^/  /'
+  else
+    grep -E 'FAIL|WARN|RESULT' "$_dnsout" | sed 's/^/  /'
+    bad "the DNS audit reported a failure"
+  fi
+  rm -f "$_dnsout"
 else
   echo "  (geomask-dnscheck.sh not installed)"
 fi
