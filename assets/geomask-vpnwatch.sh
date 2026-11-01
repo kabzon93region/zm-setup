@@ -125,7 +125,21 @@ def append(lines):
         sys.stderr.write('log write failed: %s\n' % e)
 
 def is_bare_ip(h):
+    """a destination written as an address, not a name - the shape a torrent peer has"""
     return bool(re.fullmatch(r'\d{1,3}(\.\d{1,3}){3}', h or ''))
+
+def is_group_traffic(h):
+    """multicast / broadcast / link-local (mDNS 224.0.0.251, SSDP, Chromecast, DHCP). These
+    arrive on their own and are NOT peer-to-peer. Counting them as P2P made the single signal
+    the operator is told to watch cry wolf over 20 lines of 224.0.0.251:5353."""
+    if not h: return False
+    try:
+        o=[int(x) for x in h.split('.')]
+    except ValueError:
+        return False
+    if len(o)!=4 or any(x>255 for x in o): return False
+    return o[0] in (224, 225, 239) or o[0]==0 or h=='255.255.255.255' \
+        or (o[0]==169 and o[1]==254) or o[0]==127
 
 def do_tick():
     seen, known = load_cursor()
@@ -153,7 +167,7 @@ def do_report():
         raw=open(LOGF, encoding='utf-8', errors='replace').read().splitlines()
     except Exception:
         print(json.dumps({'ok': False, 'error': 'no log yet'})); return
-    hosts={}; bare=0; errs={}; srcs={}; first=last=''
+    hosts={}; bare=0; grp=0; errs={}; srcs={}; first=last=''
     for ln in raw:
         p=ln.split()
         if len(p) < 4: continue
@@ -164,7 +178,9 @@ def do_report():
         host=re.sub(r':\d+$','', tgt.split(' ')[0])
         if host:
             hosts[host]=hosts.get(host,0)+1
-            if is_bare_ip(host): bare+=1
+            if is_bare_ip(host):
+                if is_group_traffic(host): grp+=1
+                else: bare+=1
         m=re.search(r'err=(.*)', ln)
         if m:
             k=m.group(1)[:60]; errs[k]=errs.get(k,0)+1
@@ -173,12 +189,17 @@ def do_report():
     top=sorted(hosts.items(), key=lambda x:-x[1])[:25]
     print('watched group : %s' % GROUP)
     print('log lines     : %d  (%s .. %s)' % (len(raw), first or '-', last or '-'))
-    print('distinct dests: %d, of them bare IPs (P2P-shaped): %d' % (len(hosts), bare))
+    print('distinct dests: %d' % len(hosts))
+    print('PEER-SHAPED (bare IP, not multicast): %d   <- this is the number to watch' % bare)
+    if grp: print('   (ignored as local multicast/broadcast traffic: %d)' % grp)
     print('sources       : %s' % (dict(sorted(srcs.items(), key=lambda x:-x[1])[:8]) or '-'))
     print('errors        :')
     for k,v in sorted(errs.items(), key=lambda x:-x[1])[:6]: print('   %5d  %s' % (v,k))
     print('top destinations:')
-    for h,v in top: print('   %5d  %s%s' % (v, h, '   <- bare IP' if is_bare_ip(h) else ''))
+    for h,v in top:
+        tag='   <- peer-shaped IP' if (is_bare_ip(h) and not is_group_traffic(h)) else \
+            ('   (multicast, ignored)' if is_group_traffic(h) else '')
+        print('   %5d  %s%s' % (v, h, tag))
 
 args=sys.argv[1:]
 if '--report' in args: do_report(); sys.exit(0)

@@ -132,7 +132,7 @@ rules:
   - RULE-SET,ytvpn,VPN
   - RULE-SET,ytdirect,DIRECT
   - RULE-SET,ai,AI
-  - RULE-SET,torrentdirect,DIRECT
+  - RULE-SET,torrentdirect,VPN
   - SRC-PORT,41552,VPN
   - RULE-SET,mtrickle_bulk,VPN
   - RULE-SET,mtrickle,VPN-noP2P
@@ -582,7 +582,7 @@ if grep -qE 'x-hwid|token|password|secret|/sub' "$HERE/../assets/torrentdirect.y
   echo "FAIL: S23 ruleset asset contains a secret-looking string"; failn=$((failn+1))
 else echo "PASS: S23 ruleset asset has no secrets"; pass=$((pass+1)); fi
 grep -qF '"torrentdirect.yaml"' "$HERE/../build.py" && { echo "PASS: S23 wired into build MAP"; pass=$((pass+1)); } || { echo "FAIL: S23 not in build MAP"; failn=$((failn+1)); }
-for _p in '/etc/mihomo/ruleset/torrentdirect.yaml' 'RULE-SET,torrentdirect,DIRECT' 'torrentdirect->DIRECT rule' 'no blanket P2P port rules'; do
+for _p in '/etc/mihomo/ruleset/torrentdirect.yaml' 'RULE-SET,torrentdirect,(DIRECT|VPN)' 'torrentdirect rule: present' 'no blanket P2P port rules'; do
   if grep -qF -- "$_p" "$SCRIPT"; then echo "PASS: S23 installer has: $_p"; pass=$((pass+1))
   else echo "FAIL: S23 installer missing: $_p"; failn=$((failn+1)); fi
 done
@@ -592,12 +592,12 @@ _tmpl=$(awk "/^ *printf .*'rules:'/{f=1} f{print} /'  - MATCH,GLOBAL'/{if(f)exit
 if printf '%s' "$_tmpl" | grep -qE "DST-PORT,(6969|1337|2710|8081),VPN"; then
   echo "FAIL: S23 template still redirects P2P ports to VPN"; failn=$((failn+1))
 else echo "PASS: S23 no P2P port -> VPN in the template"; pass=$((pass+1)); fi
-if ! printf '%s' "$_tmpl" | grep -qF 'RULE-SET,torrentdirect,DIRECT'; then
+if ! printf '%s' "$_tmpl" | grep -qF 'RULE-SET,torrentdirect,VPN'; then
   echo "FAIL: S23 template lacks the torrentdirect rule"; failn=$((failn+1))
 else echo "PASS: S23 template emits the torrentdirect rule"; pass=$((pass+1)); fi
 # ordering INSIDE the template: ai first, then torrentdirect, then mtrickle
 _la=$(printf '%s\n' "$_tmpl" | grep -nF "RULE-SET,ai,AI" | head -1 | cut -d: -f1)
-_lt=$(printf '%s\n' "$_tmpl" | grep -nF "RULE-SET,torrentdirect,DIRECT" | head -1 | cut -d: -f1)
+_lt=$(printf '%s\n' "$_tmpl" | grep -nF "RULE-SET,torrentdirect,VPN" | head -1 | cut -d: -f1)
 _lm=$(printf '%s\n' "$_tmpl" | grep -nF "RULE-SET,mtrickle,VPN" | head -1 | cut -d: -f1)
 if [ -n "$_la" ] && [ -n "$_lt" ] && [ -n "$_lm" ] && [ "$_la" -lt "$_lt" ] && [ "$_lt" -lt "$_lm" ]; then
   echo "PASS: S23 template rule order ai < torrentdirect < mtrickle"; pass=$((pass+1))
@@ -946,6 +946,21 @@ fi
 
 # v1.21.6: the sync must follow the interface, not one hard-coded name - otherwise pointing a
 # group at the AI tunnel silently removes its domains from the AI ruleset.
+# v1.21.7: the panel needs the provider's own headers to fetch a subscription at all - without
+# x-hwid the server answers a 1.4 KB stub, and the scan kept "refusing to overwrite" forever.
+grep -qF 'def provider_block(name)' "$HERE/../assets/geomask-node-scan.sh" \
+  && grep -qF "log('provider %s: url ok, %d header(s)" "$HERE/../assets/geomask-node-scan.sh" \
+  && { echo "PASS: S35 scan reads every provider header, not one regex guess"; pass=$((pass+1)); } \
+  || { echo "FAIL: S35 the scan can still fetch a subscription without its headers"; failn=$((failn+1)); }
+# the one number the owner is told to watch must not fire on mDNS
+grep -qF 'def is_group_traffic' "$HERE/../assets/geomask-vpnwatch.sh" \
+  && grep -qF 'PEER-SHAPED (bare IP, not multicast)' "$HERE/../assets/geomask-vpnwatch.sh" \
+  && { echo "PASS: S35 multicast is excluded from the peer-shaped signal"; pass=$((pass+1)); } \
+  || { echo "FAIL: S35 mDNS traffic is reported as P2P"; failn=$((failn+1)); }
+# torrentdirect may legitimately target either lane now; the checker must not cry over it
+grep -qF 'RULE-SET,torrentdirect,(DIRECT|VPN)' "$HERE/../geomask.sh.in" \
+  && { echo "PASS: S35 --check accepts torrentdirect on either lane"; pass=$((pass+1)); } \
+  || { echo "FAIL: S35 --check still demands the retired DIRECT target"; failn=$((failn+1)); }
 grep -qF "TUNNELED_IFACES = {'Mihomo', 'AI', 'VPN-noP2P'}" "$HERE/../assets/sync_mtrickle_mihomo.sh" \
   && grep -qF "g.get('interface') not in TUNNELED_IFACES" "$HERE/../assets/sync_mtrickle_mihomo.sh" \
   && { echo "PASS: S34 sync classifies groups by interface"; pass=$((pass+1)); } \

@@ -91,16 +91,38 @@ elif provider.strip()=='all':
 sub_ua=cfgd.get('sub_user_agent','clash-meta')
 
 text=open(CFG, encoding='utf-8').read()
-# provider url (+ optional header x-hwid lines)
-m=re.search(r'%s:\s*\n(?:[^\n]*\n)*?\s*url:\s*"?([^"\n]+)"?' % re.escape(provider), text)
-if not m:
+# Read the provider block properly: url plus EVERY header entry, in both shapes the config uses
+#   header:
+#     x-hwid: value          and          x-hwid:
+#                                            - value
+# The old single-regex attempt silently produced no header for some layouts, and without
+# x-hwid the panel answers a 1.4 KB stub ("Приложение не поддерживается") instead of the real
+# 16 KB subscription - so the scan kept refusing to update the filter on a working account.
+def provider_block(name):
+    m=re.search(r'(?m)^  %s:\n' % re.escape(name), text)
+    if not m: return None
+    rest=text[m.end():]
+    nxt=re.search(r'(?m)^  \S', rest)
+    return rest[:nxt.start()] if nxt else rest
+
+blk=provider_block(provider)
+if blk is None or 'url:' not in blk:
     log('provider %s url not found' % provider); sys.exit(1)
-url=m.group(1).strip()
+url=re.search(r'url:\s*"?([^"\n]+)"?', blk).group(1).strip()
 hdrs={}
-hm=re.search(r'%s:\s*\n((?:[^\n]*\n)*?)\s*url:' % re.escape(provider), text)
-if hm and 'x-hwid' in hm.group(1):
-    hv=re.search(r'-\s*"?([^"\n]+)"?', hm.group(1)[hm.group(1).find('x-hwid'):])
-    if hv: hdrs['x-hwid']=hv.group(1).strip()
+hsec=re.search(r'(?m)^    header:\n((?:      .*\n|\s*\n)+)', blk)
+if hsec:
+    hb=hsec.group(1)
+    key=None
+    for ln in hb.splitlines():
+        km=re.match(r'^      ([A-Za-z0-9_-]+):\s*(.*)$', ln)
+        im=re.match(r'^\s+-\s*"?([^"\n]+)"?\s*$', ln)
+        if km:
+            key=km.group(1)
+            if km.group(2).strip(): hdrs[key]=km.group(2).strip().strip('"\'')
+        elif im and key:
+            hdrs[key]=im.group(1).strip()
+log('provider %s: url ok, %d header(s): %s' % (provider, len(hdrs), ','.join(hdrs) or 'none'))
 
 raw=''
 for _try in range(3):

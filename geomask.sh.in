@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.21.6"
+GM_VERSION="1.21.7"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -250,7 +250,11 @@ step3_check() {
   grep -q 'DOMAIN-SUFFIX,youtube.com)),REJECT' "$_c" 2>/dev/null && info "QUIC reject (видео -> TCP): present" || warn "QUIC reject rules missing (B-016: тротлинг QUIC-видео)"
   grep -qE 'RULE-SET,ytvpn,(VPN|VPN-noP2P)' "$_c" 2>/dev/null && info "ytvpn rule: present" || warn "ytvpn rule missing (IP-blocked googlevideo edges won't route to a tunnel)"
   # v1.14.4: torrents must never be swallowed by the VPN lists (owner policy 30.10)
-  grep -q 'RULE-SET,torrentdirect,DIRECT' "$_c" 2>/dev/null && info "torrentdirect->DIRECT rule: present" || warn "torrentdirect rule missing (tracker domains can still go to VPN)"
+  # v1.21.7: the owner moved torrent/tracker domains from DIRECT onto the P2P-tolerant VPN
+  # lane, so either target is correct now - only a missing ruleset is a problem.
+  grep -qE 'RULE-SET,torrentdirect,(DIRECT|VPN)' "$_c" 2>/dev/null \
+    && info "torrentdirect rule: present ($(awk -F, '/RULE-SET,torrentdirect/{print $3; exit}' "$_c"))" \
+    || warn "torrentdirect rule missing (tracker domains can still go to the wrong subscription)"
   # v1.17.0: lane invariant. A torrent peer is always a bare IP, so no IP rule may reach the
   # subscription that forbids P2P. When the P2P-tolerant "VPN" lane exists the IP ruleset must be
   # split out into mtrickle_bulk.yaml and routed there.
@@ -501,7 +505,7 @@ write_mihomo_config() {
     printf '%s\n' '  - DOMAIN-SUFFIX,cloudflare-ech.com,AI'
     printf '%s\n' '  - RULE-SET,ai,AI'
     printf '%s\n' '  # torrent tracker endpoints (public lists) - DIRECT, after ai so the AI policy always wins'
-    printf '%s\n' '  - RULE-SET,torrentdirect,DIRECT'
+    printf '%s\n' '  - RULE-SET,torrentdirect,VPN'
     printf '%s\n' '  # torrent client listening port: peers that dial US must not reach the VPN slot;'
     printf '%s\n' '  # with a RESERVE/VPN lane configured geomask repoints this to that lane'
     printf '%s\n' '  - SRC-PORT,41552,AI'

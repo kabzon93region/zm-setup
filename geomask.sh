@@ -33,7 +33,7 @@
 
 set -u
 
-GM_VERSION="1.21.6"
+GM_VERSION="1.21.7"
 GM_PREFIX="${GM_PREFIX:-}"          # path prefix for tests (empty on real router)
 GM_YES=0
 GM_AUTO=0
@@ -214,7 +214,7 @@ TUN=http://127.0.0.1:7890
 SYNCLISTS=/root/sync_mtrickle_mihomo.sh
 AI_RULES=/etc/mihomo/ruleset/ai.yaml
 MT_RULES=/etc/mihomo/ruleset/mtrickle.yaml
-BACKEND_VERSION="1.21.6"
+BACKEND_VERSION="1.21.7"
 # self-update state (panel button): check cache, status file, detached runner
 UPD_DIR=/tmp/geomask-upd
 UPD_CHECK=$UPD_DIR/check.json
@@ -1730,7 +1730,7 @@ var callTorGet     = rpc.declare({ object: 'geo-sync', method: 'torrent_get', ex
 var callTorRefresh = rpc.declare({ object: 'geo-sync', method: 'torrent_refresh', expect: {} });
 var callTorListener= rpc.declare({ object: 'geo-sync', method: 'torrent_listener', params: { state: null }, expect: {} });
 var callTorExtra   = rpc.declare({ object: 'geo-sync', method: 'torrent_extra', params: { hosts: null }, expect: {} });
-var PANEL_VERSION = '1.21.6';
+var PANEL_VERSION = '1.21.7';
 
 /* Copy text to clipboard over plain http (LuCI): execCommand fallback for non-secure context. */
 function copyToClipboard(txt, btn) {
@@ -2886,7 +2886,11 @@ step3_check() {
   grep -q 'DOMAIN-SUFFIX,youtube.com)),REJECT' "$_c" 2>/dev/null && info "QUIC reject (видео -> TCP): present" || warn "QUIC reject rules missing (B-016: тротлинг QUIC-видео)"
   grep -qE 'RULE-SET,ytvpn,(VPN|VPN-noP2P)' "$_c" 2>/dev/null && info "ytvpn rule: present" || warn "ytvpn rule missing (IP-blocked googlevideo edges won't route to a tunnel)"
   # v1.14.4: torrents must never be swallowed by the VPN lists (owner policy 30.10)
-  grep -q 'RULE-SET,torrentdirect,DIRECT' "$_c" 2>/dev/null && info "torrentdirect->DIRECT rule: present" || warn "torrentdirect rule missing (tracker domains can still go to VPN)"
+  # v1.21.7: the owner moved torrent/tracker domains from DIRECT onto the P2P-tolerant VPN
+  # lane, so either target is correct now - only a missing ruleset is a problem.
+  grep -qE 'RULE-SET,torrentdirect,(DIRECT|VPN)' "$_c" 2>/dev/null \
+    && info "torrentdirect rule: present ($(awk -F, '/RULE-SET,torrentdirect/{print $3; exit}' "$_c"))" \
+    || warn "torrentdirect rule missing (tracker domains can still go to the wrong subscription)"
   # v1.17.0: lane invariant. A torrent peer is always a bare IP, so no IP rule may reach the
   # subscription that forbids P2P. When the P2P-tolerant "VPN" lane exists the IP ruleset must be
   # split out into mtrickle_bulk.yaml and routed there.
@@ -3137,7 +3141,7 @@ write_mihomo_config() {
     printf '%s\n' '  - DOMAIN-SUFFIX,cloudflare-ech.com,AI'
     printf '%s\n' '  - RULE-SET,ai,AI'
     printf '%s\n' '  # torrent tracker endpoints (public lists) - DIRECT, after ai so the AI policy always wins'
-    printf '%s\n' '  - RULE-SET,torrentdirect,DIRECT'
+    printf '%s\n' '  - RULE-SET,torrentdirect,VPN'
     printf '%s\n' '  # torrent client listening port: peers that dial US must not reach the VPN slot;'
     printf '%s\n' '  # with a RESERVE/VPN lane configured geomask repoints this to that lane'
     printf '%s\n' '  - SRC-PORT,41552,AI'
@@ -21783,7 +21787,21 @@ def append(lines):
         sys.stderr.write('log write failed: %s\n' % e)
 
 def is_bare_ip(h):
+    """a destination written as an address, not a name - the shape a torrent peer has"""
     return bool(re.fullmatch(r'\d{1,3}(\.\d{1,3}){3}', h or ''))
+
+def is_group_traffic(h):
+    """multicast / broadcast / link-local (mDNS 224.0.0.251, SSDP, Chromecast, DHCP). These
+    arrive on their own and are NOT peer-to-peer. Counting them as P2P made the single signal
+    the operator is told to watch cry wolf over 20 lines of 224.0.0.251:5353."""
+    if not h: return False
+    try:
+        o=[int(x) for x in h.split('.')]
+    except ValueError:
+        return False
+    if len(o)!=4 or any(x>255 for x in o): return False
+    return o[0] in (224, 225, 239) or o[0]==0 or h=='255.255.255.255' \
+        or (o[0]==169 and o[1]==254) or o[0]==127
 
 def do_tick():
     seen, known = load_cursor()
@@ -21811,7 +21829,7 @@ def do_report():
         raw=open(LOGF, encoding='utf-8', errors='replace').read().splitlines()
     except Exception:
         print(json.dumps({'ok': False, 'error': 'no log yet'})); return
-    hosts={}; bare=0; errs={}; srcs={}; first=last=''
+    hosts={}; bare=0; grp=0; errs={}; srcs={}; first=last=''
     for ln in raw:
         p=ln.split()
         if len(p) < 4: continue
@@ -21822,7 +21840,9 @@ def do_report():
         host=re.sub(r':\d+$','', tgt.split(' ')[0])
         if host:
             hosts[host]=hosts.get(host,0)+1
-            if is_bare_ip(host): bare+=1
+            if is_bare_ip(host):
+                if is_group_traffic(host): grp+=1
+                else: bare+=1
         m=re.search(r'err=(.*)', ln)
         if m:
             k=m.group(1)[:60]; errs[k]=errs.get(k,0)+1
@@ -21831,12 +21851,17 @@ def do_report():
     top=sorted(hosts.items(), key=lambda x:-x[1])[:25]
     print('watched group : %s' % GROUP)
     print('log lines     : %d  (%s .. %s)' % (len(raw), first or '-', last or '-'))
-    print('distinct dests: %d, of them bare IPs (P2P-shaped): %d' % (len(hosts), bare))
+    print('distinct dests: %d' % len(hosts))
+    print('PEER-SHAPED (bare IP, not multicast): %d   <- this is the number to watch' % bare)
+    if grp: print('   (ignored as local multicast/broadcast traffic: %d)' % grp)
     print('sources       : %s' % (dict(sorted(srcs.items(), key=lambda x:-x[1])[:8]) or '-'))
     print('errors        :')
     for k,v in sorted(errs.items(), key=lambda x:-x[1])[:6]: print('   %5d  %s' % (v,k))
     print('top destinations:')
-    for h,v in top: print('   %5d  %s%s' % (v, h, '   <- bare IP' if is_bare_ip(h) else ''))
+    for h,v in top:
+        tag='   <- peer-shaped IP' if (is_bare_ip(h) and not is_group_traffic(h)) else \
+            ('   (multicast, ignored)' if is_group_traffic(h) else '')
+        print('   %5d  %s%s' % (v, h, tag))
 
 args=sys.argv[1:]
 if '--report' in args: do_report(); sys.exit(0)
@@ -21943,7 +21968,7 @@ ASSET_EOF
 # (C) Safety: table 101 must keep "default dev AI".
 # Logs actions only via logger -t geomask-guard (silent when healthy, cron
 # runs every 5 min - no syslog spam). Read: logread | grep geomask-guard
-GUARD_VERSION="1.21.6"
+GUARD_VERSION="1.21.7"
 
 log() { logger -t geomask-guard "$*"; }
 
@@ -22233,16 +22258,38 @@ elif provider.strip()=='all':
 sub_ua=cfgd.get('sub_user_agent','clash-meta')
 
 text=open(CFG, encoding='utf-8').read()
-# provider url (+ optional header x-hwid lines)
-m=re.search(r'%s:\s*\n(?:[^\n]*\n)*?\s*url:\s*"?([^"\n]+)"?' % re.escape(provider), text)
-if not m:
+# Read the provider block properly: url plus EVERY header entry, in both shapes the config uses
+#   header:
+#     x-hwid: value          and          x-hwid:
+#                                            - value
+# The old single-regex attempt silently produced no header for some layouts, and without
+# x-hwid the panel answers a 1.4 KB stub ("Приложение не поддерживается") instead of the real
+# 16 KB subscription - so the scan kept refusing to update the filter on a working account.
+def provider_block(name):
+    m=re.search(r'(?m)^  %s:\n' % re.escape(name), text)
+    if not m: return None
+    rest=text[m.end():]
+    nxt=re.search(r'(?m)^  \S', rest)
+    return rest[:nxt.start()] if nxt else rest
+
+blk=provider_block(provider)
+if blk is None or 'url:' not in blk:
     log('provider %s url not found' % provider); sys.exit(1)
-url=m.group(1).strip()
+url=re.search(r'url:\s*"?([^"\n]+)"?', blk).group(1).strip()
 hdrs={}
-hm=re.search(r'%s:\s*\n((?:[^\n]*\n)*?)\s*url:' % re.escape(provider), text)
-if hm and 'x-hwid' in hm.group(1):
-    hv=re.search(r'-\s*"?([^"\n]+)"?', hm.group(1)[hm.group(1).find('x-hwid'):])
-    if hv: hdrs['x-hwid']=hv.group(1).strip()
+hsec=re.search(r'(?m)^    header:\n((?:      .*\n|\s*\n)+)', blk)
+if hsec:
+    hb=hsec.group(1)
+    key=None
+    for ln in hb.splitlines():
+        km=re.match(r'^      ([A-Za-z0-9_-]+):\s*(.*)$', ln)
+        im=re.match(r'^\s+-\s*"?([^"\n]+)"?\s*$', ln)
+        if km:
+            key=km.group(1)
+            if km.group(2).strip(): hdrs[key]=km.group(2).strip().strip('"\'')
+        elif im and key:
+            hdrs[key]=im.group(1).strip()
+log('provider %s: url ok, %d header(s): %s' % (provider, len(hdrs), ','.join(hdrs) or 'none'))
 
 raw=''
 for _try in range(3):
